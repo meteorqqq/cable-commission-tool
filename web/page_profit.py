@@ -1,0 +1,148 @@
+"""利润提成页"""
+
+import tempfile
+from pathlib import Path
+
+import streamlit as st
+import pandas as pd
+
+from engine.calculator import (
+    calc_profit_commission, ContractPricing, extract_project_list,
+    load_contract_pricing_excel, DEFAULT_PROFIT_BASE_RATE, DEFAULT_PROFIT_K_MAX,
+)
+from db.database import (
+    save_rules, load_rules, save_contract_prices, load_contract_prices,
+)
+
+
+def _build_price_df(username: str) -> pd.DataFrame:
+    delivery_df = st.session_state.get("delivery_df")
+    payment_df = st.session_state.get("payment_df")
+    projects = extract_project_list(delivery_df, payment_df)
+
+    saved_prices = {p["project_id"]: p for p in load_contract_prices(username)}
+
+    proj_totals = {}
+    if delivery_df is not None and "工程项目号" in delivery_df.columns:
+        for pid, grp in delivery_df.groupby("工程项目号"):
+            proj_totals[pid] = round(grp["发货金额"].sum(), 2)
+
+    rows = []
+    for pid in projects:
+        if pid in saved_prices:
+            sp = saved_prices[pid]
+            rows.append({
+                "工程项目号": pid,
+                "指导价": sp["guide_price"],
+                "合同价": sp["contract_price"],
+                "成本价": sp["cost_price"],
+            })
+        else:
+            total = proj_totals.get(pid, 0)
+            rows.append({"工程项目号": pid, "指导价": total, "合同价": total, "成本价": 0.0})
+
+    return pd.DataFrame(rows) if rows else pd.DataFrame(
+        columns=["工程项目号", "指导价", "合同价", "成本价"])
+
+
+def render_profit(username: str):
+    st.header("利润提成")
+
+    delivery_df = st.session_state.get("delivery_df")
+    payment_df = st.session_state.get("payment_df")
+
+    if delivery_df is None or payment_df is None:
+        st.warning("请先在数据导入页上传交货和回款数据")
+        return
+
+    col_rule, col_import = st.columns(2, gap="large")
+
+    with col_rule:
+        with st.container(border=True):
+            st.subheader("规则设置")
+            saved = load_rules(username, "profit")
+            base_rate = saved["base_rate"] if saved else DEFAULT_PROFIT_BASE_RATE
+            k_max = saved["k_max"] if saved else DEFAULT_PROFIT_K_MAX
+
+            base_rate = st.number_input("基础提成率 (%)", value=float(base_rate),
+                                         min_value=0.0, step=0.01, format="%.4f")
+            k_max = st.number_input("K 系数上限", value=float(k_max),
+                                     min_value=0.0, step=0.1, format="%.2f")
+
+            if st.button("保存规则", key="save_profit_rules"):
+                save_rules(username, "profit", {"base_rate": base_rate, "k_max": k_max})
+                st.success("规则已保存")
+
+    with col_import:
+        with st.container(border=True):
+            st.subheader("导入合同价格")
+            uploaded = st.file_uploader("上传合同价格 Excel", type=["xls", "xlsx", "csv"],
+                                         key="pricing_uploader")
+            if uploaded is not None:
+                with tempfile.NamedTemporaryFile(delete=False, suffix=Path(uploaded.name).suffix) as tmp:
+                    tmp.write(uploaded.read())
+                    tmp_path = tmp.name
+                try:
+                    pricing_map = load_contract_pricing_excel(tmp_path)
+                    imported_rows = []
+                    for pid, p in pricing_map.items():
+                        imported_rows.append({
+                            "project_id": pid,
+                            "guide_price": p.guide_price,
+                            "contract_price": p.contract_price,
+                            "cost_price": p.cost_price,
+                        })
+                    save_contract_prices(username, imported_rows)
+                    st.success(f"已导入 {len(imported_rows)} 条合同价格")
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"导入失败: {e}")
+
+    with st.container(border=True):
+        st.subheader("合同价格表")
+        price_df = _build_price_df(username)
+        edited_prices = st.data_editor(
+            price_df, width="stretch", key="price_editor",
+            disabled=["工程项目号"], height=300,
+        )
+
+        c1, c2 = st.columns(2)
+        with c1:
+            if st.button("保存价格表", use_container_width=True):
+                rows = []
+                for _, r in edited_prices.iterrows():
+                    rows.append({
+                        "project_id": r["工程项目号"],
+                        "guide_price": float(r["指导价"]),
+                        "contract_price": float(r["合同价"]),
+                        "cost_price": float(r["成本价"]),
+                    })
+                save_contract_prices(username, rows)
+                st.success("价格已保存到数据库")
+        with c2:
+            if st.button("计算利润提成", type="primary", use_container_width=True):
+                prices = {}
+                for _, r in edited_prices.iterrows():
+                    pid = r["工程项目号"]
+                    prices[pid] = ContractPricing(
+                        project_id=pid,
+                        guide_price=float(r["指导价"]),
+                        contract_price=float(r["合同价"]),
+                        cost_price=float(r["成本价"]),
+                    )
+                try:
+                    result = calc_profit_commission(
+                        delivery_df, payment_df, prices,
+                        base_rate_pct=base_rate, k_max=k_max)
+                    st.session_state["profit_result"] = result
+                    st.success(f"计算完成，共 {len(result)} 条记录")
+                except Exception as e:
+                    st.error(f"计算出错: {e}")
+
+    result = st.session_state.get("profit_result")
+    if result is not None and not result.empty:
+        with st.container(border=True):
+            st.subheader("计算结果")
+            st.dataframe(result, width="stretch", height=400)
+            csv = result.to_csv(index=False).encode("utf-8-sig")
+            st.download_button("下载结果 CSV", csv, "利润提成.csv", "text/csv")

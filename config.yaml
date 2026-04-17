@@ -1,0 +1,13 @@
+credentials:
+  usernames:
+    admin:
+      name: 管理员
+      password: "$2b$12$XSbcCrwonylu7uMJHHT1BODL1cgvgOhIJAh/njqqz9VmZJqvPepxu"
+    user1:
+      name: 审核员
+      password: "$2b$12$iDe2QxF6oyohmQOuJSuyhuhZ9K9QMfIINzmQx./A8lec3tIVjLoR2"
+
+cookie:
+  expiry_days: 30
+  key: "cable_commission_tool_secret_key_2024"
+  name: "cable_auth"
