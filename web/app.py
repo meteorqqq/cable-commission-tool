@@ -17,6 +17,7 @@ from web.page_profit import render_profit
 from web.page_payment import render_payment
 from web.page_total import render_total
 from web.page_history import render_history
+from db.database import load_import_snapshots
 
 st.set_page_config(
     page_title="电缆提成计算工具",
@@ -158,8 +159,14 @@ def main():
     if "payment_df" not in st.session_state:
         st.session_state.payment_df = None
 
+    snap_dd, snap_pd = load_import_snapshots(username)
+    if st.session_state.delivery_df is None and snap_dd is not None:
+        st.session_state.delivery_df = snap_dd
+    if st.session_state.payment_df is None and snap_pd is not None:
+        st.session_state.payment_df = snap_pd
+
     page_map = {
-        "数据导入": lambda: render_import(),
+        "数据导入": lambda: render_import(username),
         "完成额度提成": lambda: render_quota(username),
         "利润提成": lambda: render_profit(username),
         "回款时效提成": lambda: render_payment(username),

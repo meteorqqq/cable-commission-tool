@@ -10,7 +10,9 @@ import pandas as pd
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker, Session
 
-from db.models import Base, CalcSession, SessionResult, SavedRule, ContractPrice
+from db.models import (
+    Base, CalcSession, SessionResult, SavedRule, ContractPrice, ImportedSnapshot,
+)
 
 DB_PATH = Path(__file__).resolve().parent.parent / "data" / "app.db"
 
@@ -164,5 +166,57 @@ def load_contract_prices(username: str) -> list[dict]:
             "contract_price": r.contract_price,
             "cost_price": r.cost_price,
         } for r in rows]
+    finally:
+        sess.close()
+
+
+def _dataframe_to_records_json(df: pd.DataFrame) -> str:
+    data = df.copy()
+    for col in data.columns:
+        if pd.api.types.is_datetime64_any_dtype(data[col]):
+            data[col] = data[col].dt.strftime("%Y-%m-%d")
+    return data.to_json(orient="records", force_ascii=False)
+
+
+def save_import_snapshots(
+    username: str,
+    delivery_df: pd.DataFrame | None = None,
+    payment_df: pd.DataFrame | None = None,
+):
+    """持久化交货/回款 Excel 解析后的全量明细；仅更新传入的非空表。"""
+    sess = get_session()
+    try:
+        row = sess.query(ImportedSnapshot).filter_by(username=username).first()
+        if row is None:
+            row = ImportedSnapshot(username=username)
+            sess.add(row)
+            sess.flush()
+        if delivery_df is not None and not delivery_df.empty:
+            row.delivery_json = _dataframe_to_records_json(delivery_df)
+        if payment_df is not None and not payment_df.empty:
+            row.payment_json = _dataframe_to_records_json(payment_df)
+        row.updated_at = datetime.now()
+        sess.commit()
+    finally:
+        sess.close()
+
+
+def load_import_snapshots(username: str) -> tuple[pd.DataFrame | None, pd.DataFrame | None]:
+    sess = get_session()
+    try:
+        row = sess.query(ImportedSnapshot).filter_by(username=username).first()
+        if row is None:
+            return None, None
+        delivery = (
+            pd.read_json(io.StringIO(row.delivery_json), orient="records")
+            if row.delivery_json
+            else None
+        )
+        payment = (
+            pd.read_json(io.StringIO(row.payment_json), orient="records")
+            if row.payment_json
+            else None
+        )
+        return delivery, payment
     finally:
         sess.close()

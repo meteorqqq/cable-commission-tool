@@ -199,10 +199,49 @@ def extract_project_list(delivery_df: pd.DataFrame | None,
                          payment_df: pd.DataFrame | None) -> list[str]:
     projects = set()
     if delivery_df is not None and "工程项目号" in delivery_df.columns:
-        projects.update(delivery_df["工程项目号"].dropna().unique())
+        projects.update(delivery_df["工程项目号"].dropna().astype(str).unique())
     if payment_df is not None and "工程项目号" in payment_df.columns:
-        projects.update(payment_df["工程项目号"].dropna().unique())
+        projects.update(payment_df["工程项目号"].dropna().astype(str).unique())
     return sorted(projects)
+
+
+def build_contract_overview(delivery_df: pd.DataFrame | None,
+                            payment_df: pd.DataFrame | None) -> pd.DataFrame:
+    """按工程项目号汇总：交货/回款行数与金额，覆盖仅出现在单侧的合同号。"""
+    pids: set[str] = set()
+    if delivery_df is not None and not delivery_df.empty and "工程项目号" in delivery_df.columns:
+        pids.update(delivery_df["工程项目号"].dropna().astype(str).unique())
+    if payment_df is not None and not payment_df.empty and "工程项目号" in payment_df.columns:
+        pids.update(payment_df["工程项目号"].dropna().astype(str).unique())
+    rows = []
+    for pid in sorted(pids):
+        d_lines = d_amt = 0
+        if delivery_df is not None and not delivery_df.empty and "工程项目号" in delivery_df.columns:
+            m = delivery_df["工程项目号"].astype(str) == pid
+            d_lines = int(m.sum())
+            if "发货金额" in delivery_df.columns:
+                d_amt = float(delivery_df.loc[m, "发货金额"].sum())
+        p_lines = p_amt = 0
+        if payment_df is not None and not payment_df.empty and "工程项目号" in payment_df.columns:
+            m = payment_df["工程项目号"].astype(str) == pid
+            p_lines = int(m.sum())
+            if "回款金额" in payment_df.columns:
+                p_amt = float(payment_df.loc[m, "回款金额"].sum())
+        if d_lines > 0 and p_lines > 0:
+            tag = "交货与回款均有"
+        elif d_lines > 0:
+            tag = "仅交货明细"
+        else:
+            tag = "仅回款明细"
+        rows.append({
+            "工程项目号": pid,
+            "交货行数": d_lines,
+            "交货金额合计": round(d_amt, 2),
+            "回款行数": p_lines,
+            "回款金额合计": round(p_amt, 2),
+            "数据情况": tag,
+        })
+    return pd.DataFrame(rows)
 
 
 def _build_salesperson_dept_map(delivery_df: pd.DataFrame) -> dict[str, str]:
