@@ -121,10 +121,19 @@ def load_delivery_excel(path: str) -> pd.DataFrame:
         elif "开票单位" in col:
             col_map[col] = "开票单位"
     df = df.rename(columns=col_map)
-    df = df.dropna(subset=["工程项目号"])
+
+    if "工程项目号" not in df.columns:
+        df["工程项目号"] = ""
+    df["工程项目号"] = df["工程项目号"].astype("string").str.strip()
+    df.loc[df["工程项目号"].isin(["", "nan", "None"]) | df["工程项目号"].isna(),
+           "工程项目号"] = "其他"
+
+    if "销售员" in df.columns:
+        df = df[df["销售员"].notna() & (df["销售员"].astype(str).str.strip() != "")]
+
     df["发货金额"] = pd.to_numeric(df["发货金额"], errors="coerce").fillna(0)
     df["发货日期"] = pd.to_datetime(df["发货日期"], errors="coerce")
-    return df
+    return df.reset_index(drop=True)
 
 
 def load_payment_excel(path: str) -> pd.DataFrame:
@@ -140,13 +149,32 @@ def load_payment_excel(path: str) -> pd.DataFrame:
             col_map[col] = "回款日期"
         elif "工程项目号" in col:
             col_map[col] = "工程项目号"
-        elif "销售员" in col:
+        elif "销售部门" in col:
+            col_map[col] = "销售部门"
+        elif "销售员编号" in col:
+            col_map[col] = "销售员编号"
+        elif "销售员" in col and "编号" not in col:
             col_map[col] = "销售员"
+        elif "开票单位" in col:
+            col_map[col] = "开票单位"
+        elif "订货单位" in col:
+            col_map[col] = "订货单位"
+        elif "核销金额" in col:
+            col_map[col] = "核销金额"
     df = df.rename(columns=col_map)
-    df = df.dropna(subset=["工程项目号"])
+
+    if "工程项目号" not in df.columns:
+        df["工程项目号"] = ""
+    df["工程项目号"] = df["工程项目号"].astype("string").str.strip()
+    df.loc[df["工程项目号"].isin(["", "nan", "None"]) | df["工程项目号"].isna(),
+           "工程项目号"] = "其他"
+
+    if "销售员" in df.columns:
+        df = df[df["销售员"].notna() & (df["销售员"].astype(str).str.strip() != "")]
+
     df["回款金额"] = pd.to_numeric(df["回款金额"], errors="coerce").fillna(0)
     df["回款日期"] = pd.to_datetime(df["回款日期"], errors="coerce")
-    return df
+    return df.reset_index(drop=True)
 
 
 def load_contract_pricing_excel(path: str) -> dict[str, "ContractPricing"]:
@@ -199,18 +227,199 @@ def extract_project_list(delivery_df: pd.DataFrame | None,
                          payment_df: pd.DataFrame | None) -> list[str]:
     projects = set()
     if delivery_df is not None and "工程项目号" in delivery_df.columns:
-        projects.update(delivery_df["工程项目号"].dropna().unique())
+        projects.update(delivery_df["工程项目号"].dropna().astype(str).unique())
     if payment_df is not None and "工程项目号" in payment_df.columns:
-        projects.update(payment_df["工程项目号"].dropna().unique())
+        projects.update(payment_df["工程项目号"].dropna().astype(str).unique())
     return sorted(projects)
 
 
-def _build_salesperson_dept_map(delivery_df: pd.DataFrame) -> dict[str, str]:
-    mapping = {}
-    if "销售员" in delivery_df.columns and "销售部门" in delivery_df.columns:
-        for _, row in delivery_df[["销售员", "销售部门"]].drop_duplicates().iterrows():
-            if pd.notna(row["销售员"]) and pd.notna(row["销售部门"]):
-                mapping[row["销售员"]] = row["销售部门"]
+def build_contract_overview(delivery_df: pd.DataFrame | None,
+                            payment_df: pd.DataFrame | None) -> pd.DataFrame:
+    """按工程项目号汇总：交货/回款行数与金额，覆盖仅出现在单侧的合同号。"""
+    pids: set[str] = set()
+    if delivery_df is not None and not delivery_df.empty and "工程项目号" in delivery_df.columns:
+        pids.update(delivery_df["工程项目号"].dropna().astype(str).unique())
+    if payment_df is not None and not payment_df.empty and "工程项目号" in payment_df.columns:
+        pids.update(payment_df["工程项目号"].dropna().astype(str).unique())
+    rows = []
+    for pid in sorted(pids):
+        d_lines = d_amt = 0
+        if delivery_df is not None and not delivery_df.empty and "工程项目号" in delivery_df.columns:
+            m = delivery_df["工程项目号"].astype(str) == pid
+            d_lines = int(m.sum())
+            if "发货金额" in delivery_df.columns:
+                d_amt = float(delivery_df.loc[m, "发货金额"].sum())
+        p_lines = p_amt = 0
+        if payment_df is not None and not payment_df.empty and "工程项目号" in payment_df.columns:
+            m = payment_df["工程项目号"].astype(str) == pid
+            p_lines = int(m.sum())
+            if "回款金额" in payment_df.columns:
+                p_amt = float(payment_df.loc[m, "回款金额"].sum())
+        if d_lines > 0 and p_lines > 0:
+            tag = "交货与回款均有"
+        elif d_lines > 0:
+            tag = "仅交货明细"
+        else:
+            tag = "仅回款明细"
+        rows.append({
+            "工程项目号": pid,
+            "交货行数": d_lines,
+            "交货金额合计": round(d_amt, 2),
+            "回款行数": p_lines,
+            "回款金额合计": round(p_amt, 2),
+            "数据情况": tag,
+        })
+    return pd.DataFrame(rows)
+
+
+def list_salespersons(delivery_df: pd.DataFrame | None,
+                      payment_df: pd.DataFrame | None) -> list[str]:
+    names: set[str] = set()
+    for df in (delivery_df, payment_df):
+        if df is None or df.empty or "销售员" not in df.columns:
+            continue
+        names.update(str(n).strip() for n in df["销售员"].dropna().unique())
+    return sorted(n for n in names if n)
+
+
+def build_salesperson_detail(
+    salesperson: str,
+    delivery_df: pd.DataFrame | None,
+    payment_df: pd.DataFrame | None,
+) -> dict:
+    """返回某销售员的所有合同明细与汇总。
+
+    结构:
+        {
+            "销售员": str,
+            "销售部门": str,
+            "总发货额": float, "总回款额": float, "未回款额": float,
+            "合同数": int,
+            "合同列表": [
+                {
+                    "工程项目号": str,   # "其他" 表示无合同号
+                    "订货单位": list[str],
+                    "开票单位": list[str],
+                    "发货明细": DataFrame(发货日期/发货金额/订货单位/开票单位),
+                    "回款明细": DataFrame(回款日期/回款金额/开票单位/核销金额),
+                    "发货额": float, "回款额": float, "未回款额": float,
+                    "状态": "已完成" | "未发货" | "部分回款" | "未回款",
+                }, ...
+            ]
+        }
+    """
+    dept_map = _build_salesperson_dept_map(delivery_df, payment_df)
+    dept = dept_map.get(salesperson, "")
+
+    def _empty(cols):
+        return pd.DataFrame(columns=cols)
+
+    del_rows = (
+        delivery_df[delivery_df["销售员"].astype(str) == salesperson].copy()
+        if delivery_df is not None and not delivery_df.empty and "销售员" in delivery_df.columns
+        else _empty(["工程项目号", "发货日期", "发货金额", "订货单位", "开票单位"])
+    )
+    pay_rows = (
+        payment_df[payment_df["销售员"].astype(str) == salesperson].copy()
+        if payment_df is not None and not payment_df.empty and "销售员" in payment_df.columns
+        else _empty(["工程项目号", "回款日期", "回款金额", "开票单位", "核销金额"])
+    )
+
+    if "发货日期" in del_rows.columns:
+        del_rows["发货日期"] = pd.to_datetime(del_rows["发货日期"], errors="coerce")
+    if "回款日期" in pay_rows.columns:
+        pay_rows["回款日期"] = pd.to_datetime(pay_rows["回款日期"], errors="coerce")
+
+    pids = set(del_rows["工程项目号"].astype(str).unique()) if not del_rows.empty else set()
+    pids.update(pay_rows["工程项目号"].astype(str).unique() if not pay_rows.empty else [])
+
+    def _order_key(pid: str):
+        return (1 if pid == "其他" else 0, pid)
+
+    contracts = []
+    total_del = total_pay = 0.0
+    for pid in sorted(pids, key=_order_key):
+        d = del_rows[del_rows["工程项目号"].astype(str) == pid] if not del_rows.empty else _empty(
+            ["发货日期", "发货金额", "订货单位", "开票单位"])
+        p = pay_rows[pay_rows["工程项目号"].astype(str) == pid] if not pay_rows.empty else _empty(
+            ["回款日期", "回款金额", "开票单位", "核销金额"])
+
+        d_amt = float(d["发货金额"].sum()) if "发货金额" in d.columns else 0.0
+        p_amt = float(p["回款金额"].sum()) if "回款金额" in p.columns else 0.0
+        total_del += d_amt
+        total_pay += p_amt
+
+        if d_amt == 0 and p_amt > 0:
+            status = "未发货（已收款）"
+        elif d_amt == 0:
+            status = "未发货"
+        elif p_amt <= 0:
+            status = "未回款"
+        elif p_amt + 1e-2 >= d_amt:
+            status = "已完成"
+        else:
+            status = "部分回款"
+
+        customers: set[str] = set()
+        invoice_units: set[str] = set()
+        for col_src, bag in [
+            ("订货单位", customers),
+            ("开票单位", invoice_units),
+        ]:
+            if col_src in d.columns:
+                bag.update(str(x).strip() for x in d[col_src].dropna().unique() if str(x).strip())
+            if col_src in p.columns:
+                bag.update(str(x).strip() for x in p[col_src].dropna().unique() if str(x).strip())
+
+        d_cols = [c for c in ["发货日期", "发货金额", "订货单位", "开票单位"] if c in d.columns]
+        p_cols = [c for c in ["回款日期", "回款金额", "开票单位", "核销金额", "订货单位"]
+                  if c in p.columns]
+
+        d_show = d[d_cols].sort_values("发货日期") if "发货日期" in d_cols else d[d_cols]
+        p_show = p[p_cols].sort_values("回款日期") if "回款日期" in p_cols else p[p_cols]
+
+        contracts.append({
+            "工程项目号": pid,
+            "订货单位": sorted(customers),
+            "开票单位": sorted(invoice_units),
+            "发货明细": d_show.reset_index(drop=True),
+            "回款明细": p_show.reset_index(drop=True),
+            "发货额": round(d_amt, 2),
+            "回款额": round(p_amt, 2),
+            "未回款额": round(max(d_amt - p_amt, 0), 2),
+            "状态": status,
+        })
+
+    return {
+        "销售员": salesperson,
+        "销售部门": dept,
+        "总发货额": round(total_del, 2),
+        "总回款额": round(total_pay, 2),
+        "未回款额": round(max(total_del - total_pay, 0), 2),
+        "合同数": len(contracts),
+        "合同列表": contracts,
+    }
+
+
+def _build_salesperson_dept_map(
+    delivery_df: pd.DataFrame | None,
+    payment_df: pd.DataFrame | None = None,
+) -> dict[str, str]:
+    """从交货和回款双表合并 销售员→销售部门 映射；交货优先。"""
+    mapping: dict[str, str] = {}
+    for src in (delivery_df, payment_df):
+        if src is None or src.empty:
+            continue
+        if "销售员" not in src.columns or "销售部门" not in src.columns:
+            continue
+        for _, row in src[["销售员", "销售部门"]].drop_duplicates().iterrows():
+            sp, dept = row["销售员"], row["销售部门"]
+            if pd.isna(sp) or pd.isna(dept):
+                continue
+            sp, dept = str(sp).strip(), str(dept).strip()
+            if not sp or not dept:
+                continue
+            mapping.setdefault(sp, dept)
     return mapping
 
 
@@ -222,32 +431,43 @@ def calc_quota_commission_by_dept(delivery_df: pd.DataFrame,
                                   payment_df: pd.DataFrame,
                                   dept_targets: dict[str, float],
                                   tiers: list[tuple[float, float]] | None = None) -> pd.DataFrame:
+    """完成额度提成。
+
+    - 部门完成比 = 部门全员发货额合计 / 部门目标额（同部门共享同一完成比）。
+    - 完成额度提成 = 个人回款额 × 对应档位提成率。
+    """
     if tiers is None:
         tiers = DEFAULT_QUOTA_TIERS
 
-    dept_map = _build_salesperson_dept_map(delivery_df)
+    dept_map = _build_salesperson_dept_map(delivery_df, payment_df)
+
+    sp_del = delivery_df.groupby("销售员")["发货金额"].sum().reset_index()
+    sp_del.columns = ["销售员", "个人发货额"]
 
     sp_pay = payment_df.groupby("销售员")["回款金额"].sum().reset_index()
     sp_pay.columns = ["销售员", "个人回款额"]
-    sp_pay["销售部门"] = sp_pay["销售员"].map(dept_map).fillna("")
 
-    dept_total = sp_pay.groupby("销售部门")["个人回款额"].sum()
+    sp = pd.merge(sp_del, sp_pay, on="销售员", how="outer").fillna(0)
+    sp["销售部门"] = sp["销售员"].map(dept_map).fillna("")
+
+    dept_total_del = sp.groupby("销售部门")["个人发货额"].sum()
 
     rows = []
-    for _, r in sp_pay.iterrows():
+    for _, r in sp.iterrows():
         dept = r["销售部门"]
         target_wan = dept_targets.get(dept, 0)
         target_yuan = target_wan * 10000
-        actual = dept_total.get(dept, 0)
+        actual_del = dept_total_del.get(dept, 0)
 
-        ratio_pct = (actual / target_yuan * 100) if target_yuan > 0 else 0
+        ratio_pct = (actual_del / target_yuan * 100) if target_yuan > 0 else 0
         rate = get_quota_rate(ratio_pct, tiers)
 
         rows.append({
             "销售员": r["销售员"],
             "销售部门": dept,
+            "个人发货额(元)": round(r["个人发货额"], 2),
             "个人回款额(元)": round(r["个人回款额"], 2),
-            "部门实际回款(万元)": round(actual / 10000, 2),
+            "部门实际发货(万元)": round(actual_del / 10000, 2),
             "部门目标额(万元)": round(target_wan, 2),
             "部门完成比": f"{ratio_pct:.1f}%",
             "提成比例": f"{rate*100:.2f}%",
@@ -271,7 +491,7 @@ def calc_profit_commission(delivery_df: pd.DataFrame,
     if k_max is None:
         k_max = DEFAULT_PROFIT_K_MAX
 
-    dept_map = _build_salesperson_dept_map(delivery_df)
+    dept_map = _build_salesperson_dept_map(delivery_df, payment_df)
 
     contract_pay = payment_df.groupby(["销售员", "工程项目号"])["回款金额"].sum().reset_index()
     contract_pay.columns = ["销售员", "工程项目号", "合同回款额"]
@@ -304,9 +524,13 @@ def calc_profit_commission(delivery_df: pd.DataFrame,
                 "销售员": r["销售员"],
                 "销售部门": dept_map.get(r["销售员"], ""),
                 "合同回款额": round(r["合同回款额"], 2),
-                "指导价": "", "合同价": "", "成本价": "",
-                "K系数": "", "利润提成率": "未设定价格",
-                "利润分类": "未设定价格", "利润提成金额": 0,
+                "指导价": np.nan,
+                "合同价": np.nan,
+                "成本价": np.nan,
+                "K系数": np.nan,
+                "利润提成率": "未设定价格",
+                "利润分类": "未设定价格",
+                "利润提成金额": 0.0,
             })
 
     return pd.DataFrame(rows) if rows else pd.DataFrame()
@@ -322,7 +546,14 @@ def calc_payment_timeliness(delivery_df: pd.DataFrame,
     if tiers is None:
         tiers = DEFAULT_PAYMENT_TIERS
 
-    dept_map = _build_salesperson_dept_map(delivery_df)
+    delivery_df = delivery_df.copy()
+    payment_df = payment_df.copy()
+    if "发货日期" in delivery_df.columns:
+        delivery_df["发货日期"] = pd.to_datetime(delivery_df["发货日期"], errors="coerce")
+    if "回款日期" in payment_df.columns:
+        payment_df["回款日期"] = pd.to_datetime(payment_df["回款日期"], errors="coerce")
+
+    dept_map = _build_salesperson_dept_map(delivery_df, payment_df)
 
     # ── 出库明细 ──
     del_detail = delivery_df.copy()
