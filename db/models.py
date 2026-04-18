@@ -52,3 +52,15 @@ class ContractPrice(Base):
     contract_price = Column(Float, default=0.0)
     cost_price = Column(Float, default=0.0)
     updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
+
+
+class ImportedSnapshot(Base):
+    """用户最近一次导入的交货/回款全量明细（含全部工程项目号及行级数据）"""
+
+    __tablename__ = "imported_snapshots"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    username = Column(String(100), nullable=False, unique=True)
+    delivery_json = Column(Text, nullable=True)
+    payment_json = Column(Text, nullable=True)
+    updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)

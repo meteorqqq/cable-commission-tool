@@ -5,6 +5,7 @@ import io
 import streamlit as st
 import pandas as pd
 
+from engine.calculator import build_contract_overview
 from db.database import save_calc_session
 
 
@@ -103,7 +104,15 @@ def render_total(username: str):
         with col_dl:
             buf = io.BytesIO()
             sheets = {"总提成汇总": total_df}
+            ov = build_contract_overview(
+                st.session_state.get("delivery_df"),
+                st.session_state.get("payment_df"),
+            )
+            if ov is not None and not ov.empty:
+                sheets["工程项目号汇总"] = ov
             for key, state_key in [
+                ("交货明细", "delivery_df"),
+                ("回款明细", "payment_df"),
                 ("完成额度提成", "quota_result"),
                 ("利润提成", "profit_result"),
                 ("回款时效提成", "timeliness_result"),
@@ -133,7 +142,15 @@ def render_total(username: str):
                                           label_visibility="collapsed")
             if st.button("保存到历史记录", use_container_width=True):
                 results = {"总提成汇总": total_df}
+                ov = build_contract_overview(
+                    st.session_state.get("delivery_df"),
+                    st.session_state.get("payment_df"),
+                )
+                if ov is not None and not ov.empty:
+                    results["工程项目号汇总"] = ov
                 for key, state_key in [
+                    ("交货明细", "delivery_df"),
+                    ("回款明细", "payment_df"),
                     ("完成额度提成", "quota_result"),
                     ("利润提成", "profit_result"),
                     ("回款时效提成", "timeliness_result"),
