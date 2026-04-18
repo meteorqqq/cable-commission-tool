@@ -17,6 +17,7 @@ from web.page_profit import render_profit
 from web.page_payment import render_payment
 from web.page_total import render_total
 from web.page_history import render_history
+from web.page_salesperson import render_salesperson
 from db.database import load_import_snapshots
 
 st.set_page_config(
@@ -111,6 +112,7 @@ st.markdown(GLOBAL_CSS, unsafe_allow_html=True)
 
 NAV_ITEMS = [
     "数据导入",
+    "销售员详情",
     "完成额度提成",
     "利润提成",
     "回款时效提成",
@@ -167,6 +169,7 @@ def main():
 
     page_map = {
         "数据导入": lambda: render_import(username),
+        "销售员详情": lambda: render_salesperson(),
         "完成额度提成": lambda: render_quota(username),
         "利润提成": lambda: render_profit(username),
         "回款时效提成": lambda: render_payment(username),

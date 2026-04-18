@@ -15,6 +15,15 @@ from db.database import (
 )
 
 
+def _profit_result_for_arrow(df: pd.DataFrame) -> pd.DataFrame:
+    """消除空字符串与数值混用的 object 列，避免 Streamlit/pyarrow 序列化失败。"""
+    out = df.copy()
+    for c in ("合同回款额", "指导价", "合同价", "成本价", "K系数", "利润提成金额"):
+        if c in out.columns:
+            out[c] = pd.to_numeric(out[c], errors="coerce")
+    return out
+
+
 def _build_price_df(username: str) -> pd.DataFrame:
     delivery_df = st.session_state.get("delivery_df")
     payment_df = st.session_state.get("payment_df")
@@ -41,8 +50,12 @@ def _build_price_df(username: str) -> pd.DataFrame:
             total = proj_totals.get(pid, 0)
             rows.append({"工程项目号": pid, "指导价": total, "合同价": total, "成本价": 0.0})
 
-    return pd.DataFrame(rows) if rows else pd.DataFrame(
-        columns=["工程项目号", "指导价", "合同价", "成本价"])
+    if not rows:
+        return pd.DataFrame(columns=["工程项目号", "指导价", "合同价", "成本价"])
+    out = pd.DataFrame(rows)
+    for c in ("指导价", "合同价", "成本价"):
+        out[c] = pd.to_numeric(out[c], errors="coerce")
+    return out
 
 
 def render_profit(username: str):
@@ -102,8 +115,22 @@ def render_profit(username: str):
         st.subheader("合同价格表")
         price_df = _build_price_df(username)
         edited_prices = st.data_editor(
-            price_df, width="stretch", key="price_editor",
-            disabled=["工程项目号"], height=300,
+            price_df,
+            width="stretch",
+            key="price_editor",
+            disabled=["工程项目号"],
+            height=300,
+            column_config={
+                "指导价": st.column_config.NumberColumn(
+                    "指导价", format="%.2f", min_value=None, step=0.01
+                ),
+                "合同价": st.column_config.NumberColumn(
+                    "合同价", format="%.2f", min_value=None, step=0.01
+                ),
+                "成本价": st.column_config.NumberColumn(
+                    "成本价", format="%.2f", min_value=None, step=0.01
+                ),
+            },
         )
 
         c1, c2 = st.columns(2)
@@ -111,11 +138,14 @@ def render_profit(username: str):
             if st.button("保存价格表", use_container_width=True):
                 rows = []
                 for _, r in edited_prices.iterrows():
+                    gp = pd.to_numeric(r["指导价"], errors="coerce")
+                    cp = pd.to_numeric(r["合同价"], errors="coerce")
+                    cos = pd.to_numeric(r["成本价"], errors="coerce")
                     rows.append({
                         "project_id": r["工程项目号"],
-                        "guide_price": float(r["指导价"]),
-                        "contract_price": float(r["合同价"]),
-                        "cost_price": float(r["成本价"]),
+                        "guide_price": float(0 if pd.isna(gp) else gp),
+                        "contract_price": float(0 if pd.isna(cp) else cp),
+                        "cost_price": float(0 if pd.isna(cos) else cos),
                     })
                 save_contract_prices(username, rows)
                 st.success("价格已保存到数据库")
@@ -124,11 +154,14 @@ def render_profit(username: str):
                 prices = {}
                 for _, r in edited_prices.iterrows():
                     pid = r["工程项目号"]
+                    gp = pd.to_numeric(r["指导价"], errors="coerce")
+                    cp = pd.to_numeric(r["合同价"], errors="coerce")
+                    cos = pd.to_numeric(r["成本价"], errors="coerce")
                     prices[pid] = ContractPricing(
                         project_id=pid,
-                        guide_price=float(r["指导价"]),
-                        contract_price=float(r["合同价"]),
-                        cost_price=float(r["成本价"]),
+                        guide_price=float(0 if pd.isna(gp) else gp),
+                        contract_price=float(0 if pd.isna(cp) else cp),
+                        cost_price=float(0 if pd.isna(cos) else cos),
                     )
                 try:
                     result = calc_profit_commission(
@@ -141,8 +174,9 @@ def render_profit(username: str):
 
     result = st.session_state.get("profit_result")
     if result is not None and not result.empty:
+        display_df = _profit_result_for_arrow(result)
         with st.container(border=True):
             st.subheader("计算结果")
-            st.dataframe(result, width="stretch", height=400)
-            csv = result.to_csv(index=False).encode("utf-8-sig")
+            st.dataframe(display_df, width="stretch", height=400)
+            csv = display_df.to_csv(index=False).encode("utf-8-sig")
             st.download_button("下载结果 CSV", csv, "利润提成.csv", "text/csv")

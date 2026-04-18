@@ -11,10 +11,12 @@ from db.database import save_rules, load_rules
 
 
 def _get_dept_list() -> list[str]:
-    df = st.session_state.get("delivery_df")
-    if df is not None and "销售部门" in df.columns:
-        return sorted(df["销售部门"].dropna().unique().tolist())
-    return []
+    depts: set[str] = set()
+    for key in ("delivery_df", "payment_df"):
+        df = st.session_state.get(key)
+        if df is not None and "销售部门" in df.columns:
+            depts.update(str(d).strip() for d in df["销售部门"].dropna().unique())
+    return sorted(d for d in depts if d)
 
 
 def _calc_dept_totals() -> dict[str, float]:
@@ -22,13 +24,29 @@ def _calc_dept_totals() -> dict[str, float]:
     payment_df = st.session_state.get("payment_df")
     if delivery_df is None or payment_df is None:
         return {}
-    dept_map = _build_salesperson_dept_map(delivery_df)
+    dept_map = _build_salesperson_dept_map(delivery_df, payment_df)
     pay = payment_df.copy()
     pay["_dept"] = pay["销售员"].map(dept_map)
     totals = {}
     for dept, grp in pay.groupby("_dept"):
         if pd.notna(dept):
             totals[dept] = round(grp["回款金额"].sum() / 10000, 2)
+    return totals
+
+
+def _calc_dept_delivery_totals() -> dict[str, float]:
+    """按 销售员→销售部门 映射汇总各部门发货额（万元）。"""
+    delivery_df = st.session_state.get("delivery_df")
+    payment_df = st.session_state.get("payment_df")
+    if delivery_df is None or "发货金额" not in delivery_df.columns:
+        return {}
+    dept_map = _build_salesperson_dept_map(delivery_df, payment_df)
+    d = delivery_df.copy()
+    d["_dept"] = d["销售员"].map(dept_map)
+    totals: dict[str, float] = {}
+    for dept, grp in d.groupby("_dept"):
+        if pd.notna(dept):
+            totals[str(dept).strip()] = round(grp["发货金额"].sum() / 10000, 2)
     return totals
 
 
@@ -65,15 +83,31 @@ def render_quota(username: str):
             st.subheader("部门目标额 (万元)")
             depts = _get_dept_list()
             defaults = _calc_dept_totals()
+            del_totals = _calc_dept_delivery_totals()
 
             if not depts:
                 st.info("未检测到部门信息")
             else:
-                dept_data = [{"部门": d, "目标额(万元)": defaults.get(d, 0.0)} for d in depts]
+                dept_data = [{
+                    "部门": d,
+                    "部门发货额(万元)": del_totals.get(d, 0.0),
+                    "目标额(万元)": defaults.get(d, 0.0),
+                } for d in depts]
                 dept_df = pd.DataFrame(dept_data)
                 edited_dept = st.data_editor(
-                    dept_df, width="stretch", key="dept_targets_editor",
-                    disabled=["部门"],
+                    dept_df,
+                    width="stretch",
+                    key="dept_targets_editor",
+                    disabled=["部门", "部门发货额(万元)"],
+                    column_config={
+                        "部门发货额(万元)": st.column_config.NumberColumn(
+                            "部门发货额(万元)", format="%.2f",
+                            help="来自交货 Excel，只读参考；用于填写目标额时对照。",
+                        ),
+                        "目标额(万元)": st.column_config.NumberColumn(
+                            "目标额(万元)", format="%.2f", min_value=0.0, step=0.01,
+                        ),
+                    },
                 )
 
     st.markdown("")

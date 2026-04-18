@@ -201,6 +201,21 @@ def save_import_snapshots(
         sess.close()
 
 
+def _normalize_loaded_df(df: pd.DataFrame | None) -> pd.DataFrame | None:
+    if df is None or df.empty:
+        return df
+    if "工程项目号" in df.columns:
+        df["工程项目号"] = df["工程项目号"].astype("string").str.strip()
+        df.loc[
+            df["工程项目号"].isin(["", "nan", "None"]) | df["工程项目号"].isna(),
+            "工程项目号",
+        ] = "其他"
+    for dcol in ("发货日期", "回款日期"):
+        if dcol in df.columns:
+            df[dcol] = pd.to_datetime(df[dcol], errors="coerce")
+    return df
+
+
 def load_import_snapshots(username: str) -> tuple[pd.DataFrame | None, pd.DataFrame | None]:
     sess = get_session()
     try:
@@ -217,6 +232,6 @@ def load_import_snapshots(username: str) -> tuple[pd.DataFrame | None, pd.DataFr
             if row.payment_json
             else None
         )
-        return delivery, payment
+        return _normalize_loaded_df(delivery), _normalize_loaded_df(payment)
     finally:
         sess.close()
