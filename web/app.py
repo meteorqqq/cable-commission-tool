@@ -472,6 +472,44 @@ div[data-testid="stMetric"] [data-testid="stMetricDelta"] {
 ::-webkit-scrollbar-track { background: transparent; }
 ::-webkit-scrollbar-thumb { background: #E2E8F0; border-radius: 6px; }
 ::-webkit-scrollbar-thumb:hover { background: #CBD5E1; }
+
+/* ───────── Mobile-nav 容器：仅窄屏显示 ───────── */
+.st-key-mobile_nav {
+    margin: 0 0 1.1rem;
+}
+.st-key-mobile_nav [data-testid="stSelectbox"] > label {
+    font-size: 0.74rem; color: var(--color-mute) !important;
+    font-weight: 600; letter-spacing: 0.06em;
+    text-transform: uppercase;
+}
+.st-key-mobile_nav [data-baseweb="select"] > div {
+    background: var(--color-surface) !important;
+    border-radius: var(--radius) !important;
+    border: 1px solid var(--color-border) !important;
+    box-shadow: var(--shadow-sm);
+    min-height: 44px;
+    font-weight: 600;
+    color: var(--color-ink) !important;
+}
+
+/* 默认（桌面 ≥769px）：隐藏移动端导航 */
+@media (min-width: 769px) {
+    .st-key-mobile_nav { display: none !important; }
+}
+
+/* 移动端（≤768px）：隐藏侧边栏与顶部栏入口，仅留主区域页面切换器 */
+@media (max-width: 768px) {
+    section[data-testid="stSidebar"],
+    [data-testid="stSidebarCollapsedControl"],
+    [data-testid="collapsedControl"],
+    button[data-testid="stBaseButton-header"] {
+        display: none !important;
+    }
+
+    .block-container {
+        padding: 1rem 0.9rem 2rem;
+    }
+}
 </style>
 """
 if hasattr(st, "html"):
@@ -551,6 +589,24 @@ def main():
         f'<span style="color:#64748B;font-size:.7rem;">@{username}</span>'
         '</div></div>'
     )
+    if "_current_page" not in st.session_state:
+        st.session_state["_current_page"] = NAV_ITEMS[0]
+
+    def _on_sidebar_nav():
+        st.session_state["_current_page"] = st.session_state["_nav_sidebar"]
+
+    def _on_mobile_nav():
+        st.session_state["_current_page"] = st.session_state["_nav_mobile"]
+
+    if "_nav_sidebar" not in st.session_state:
+        st.session_state["_nav_sidebar"] = st.session_state["_current_page"]
+    if "_nav_mobile" not in st.session_state:
+        st.session_state["_nav_mobile"] = st.session_state["_current_page"]
+    if st.session_state["_nav_sidebar"] != st.session_state["_current_page"]:
+        st.session_state["_nav_sidebar"] = st.session_state["_current_page"]
+    if st.session_state["_nav_mobile"] != st.session_state["_current_page"]:
+        st.session_state["_nav_mobile"] = st.session_state["_current_page"]
+
     with st.sidebar:
         if hasattr(st, "html"):
             st.html(sidebar_brand)
@@ -558,7 +614,19 @@ def main():
             st.markdown(sidebar_brand, unsafe_allow_html=True)
         authenticator.logout("退出登录", "sidebar")
         st.divider()
-        page = st.radio("nav", NAV_ITEMS, label_visibility="collapsed")
+        st.radio(
+            "nav", NAV_ITEMS,
+            key="_nav_sidebar", on_change=_on_sidebar_nav,
+            label_visibility="collapsed",
+        )
+
+    with st.container(key="mobile_nav"):
+        st.selectbox(
+            "页面切换", NAV_ITEMS,
+            key="_nav_mobile", on_change=_on_mobile_nav,
+        )
+
+    page = st.session_state["_current_page"]
 
     if "delivery_df" not in st.session_state:
         st.session_state.delivery_df = None
