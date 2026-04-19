@@ -174,7 +174,7 @@ def load_delivery_excel(path: str) -> pd.DataFrame:
             col_map[col] = "发货金额"
         elif "实际发货日期" in col or "发货日期" in col:
             col_map[col] = "发货日期"
-        elif any(k in col for k in ("合同编号", "工程项目号", "合同号", "项目号")):
+        elif "合同编号" in col or "合同号" in col:
             col_map[col] = "合同编号"
         elif "订货单位" in col:
             col_map[col] = "订货单位"
@@ -208,7 +208,7 @@ def load_payment_excel(path: str) -> pd.DataFrame:
             col_map[col] = "回款金额"
         elif "回款日期" in col or "收款日期" in col:
             col_map[col] = "回款日期"
-        elif any(k in col for k in ("合同编号", "工程项目号", "合同号", "项目号")):
+        elif "合同编号" in col or "合同号" in col:
             col_map[col] = "合同编号"
         elif "销售部门" in col:
             col_map[col] = "销售部门"
@@ -220,9 +220,11 @@ def load_payment_excel(path: str) -> pd.DataFrame:
             col_map[col] = "开票单位"
         elif "订货单位" in col:
             col_map[col] = "订货单位"
-        elif "核销金额" in col:
-            col_map[col] = "核销金额"
     df = df.rename(columns=col_map)
+
+    drop_cols = [c for c in df.columns if "核销" in str(c)]
+    if drop_cols:
+        df = df.drop(columns=drop_cols)
 
     if "合同编号" not in df.columns:
         df["合同编号"] = ""
@@ -247,7 +249,7 @@ def load_contract_pricing_excel(path: str) -> dict[str, "ContractPricing"]:
     pid_col = guide_col = contract_col = cost_col = None
     for col in df.columns:
         cl = col.replace(" ", "")
-        if "合同编号" in cl or "合同号" in cl or "项目号" in cl or "合同编号" in cl:
+        if "合同编号" in cl or "合同号" in cl:
             pid_col = col
         elif "指导价" in cl:
             guide_col = col
@@ -421,7 +423,7 @@ def build_salesperson_detail(
     pay_rows = (
         payment_df[payment_df["销售员"].astype(str) == salesperson].copy()
         if payment_df is not None and not payment_df.empty and "销售员" in payment_df.columns
-        else _empty(["合同编号", "回款日期", "回款金额", "开票单位", "核销金额"])
+        else _empty(["合同编号", "回款日期", "回款金额", "开票单位"])
     )
 
     if "发货日期" in del_rows.columns:
@@ -441,7 +443,7 @@ def build_salesperson_detail(
         d = del_rows[del_rows["合同编号"].astype(str) == pid] if not del_rows.empty else _empty(
             ["发货日期", "发货金额", "订货单位", "开票单位"])
         p = pay_rows[pay_rows["合同编号"].astype(str) == pid] if not pay_rows.empty else _empty(
-            ["回款日期", "回款金额", "开票单位", "核销金额"])
+            ["回款日期", "回款金额", "开票单位"])
 
         d_amt = float(d["发货金额"].sum()) if "发货金额" in d.columns else 0.0
         p_amt = float(p["回款金额"].sum()) if "回款金额" in p.columns else 0.0
