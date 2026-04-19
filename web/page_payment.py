@@ -3,7 +3,7 @@
 import streamlit as st
 import pandas as pd
 
-from engine.calculator import calc_payment_timeliness, DEFAULT_PAYMENT_TIERS
+from engine.calculator import calc_payment_timeliness, DEFAULT_PAYMENT_TIERS, format_date_columns
 from db.database import save_rules, load_rules
 
 
@@ -188,7 +188,7 @@ def render_payment(username: str):
     )
 
     del_cols_pref = ["发货日期", "发货金额", "订货单位", "开票单位"]
-    pay_cols_pref = ["回款日期", "回款金额", "开票单位", "订货单位", "核销金额"]
+    pay_cols_pref = ["回款日期", "回款金额", "开票单位", "订货单位"]
     tl_cols_pref = ["回款日期", "回款金额", "匹配发货日期", "回款周期(天)",
                     "时效提成比例", "时效提成金额"]
 
@@ -236,7 +236,7 @@ def render_payment(username: str):
                     cols = [c for c in del_cols_pref if c in d_sub.columns]
                     show = d_sub[cols].sort_values("发货日期") if "发货日期" in cols else d_sub[cols]
                     st.dataframe(
-                        show.reset_index(drop=True),
+                        format_date_columns(show.reset_index(drop=True)),
                         width="stretch",
                         height=min(260, 45 + len(show) * 36),
                         column_config={
@@ -251,12 +251,11 @@ def render_payment(username: str):
                     cols = [c for c in pay_cols_pref if c in p_sub.columns]
                     show = p_sub[cols].sort_values("回款日期") if "回款日期" in cols else p_sub[cols]
                     st.dataframe(
-                        show.reset_index(drop=True),
+                        format_date_columns(show.reset_index(drop=True)),
                         width="stretch",
                         height=min(260, 45 + len(show) * 36),
                         column_config={
                             "回款金额": st.column_config.NumberColumn(format="%.2f"),
-                            "核销金额": st.column_config.NumberColumn(format="%.2f"),
                         },
                     )
 
@@ -266,7 +265,7 @@ def render_payment(username: str):
             else:
                 cols = [c for c in tl_cols_pref if c in tl_sub.columns]
                 st.dataframe(
-                    tl_sub[cols].reset_index(drop=True),
+                    format_date_columns(tl_sub[cols].reset_index(drop=True)),
                     width="stretch",
                     height=min(260, 45 + len(tl_sub) * 36),
                     column_config={
@@ -276,7 +275,7 @@ def render_payment(username: str):
                 )
 
     with st.expander("原始时效提成明细（扁平表）", expanded=False):
-        st.dataframe(timeliness_df, width="stretch", height=400)
+        st.dataframe(format_date_columns(timeliness_df), width="stretch", height=400)
         csv = timeliness_df.to_csv(index=False).encode("utf-8-sig")
         st.download_button("下载时效明细", csv, "回款时效提成.csv", "text/csv",
                            key="dl_timeliness_flat")

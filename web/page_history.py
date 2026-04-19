@@ -6,6 +6,7 @@ import streamlit as st
 import pandas as pd
 
 from db.database import list_sessions, load_session_results, delete_session
+from engine.calculator import format_date_columns
 
 
 def render_history(username: str):
@@ -56,6 +57,6 @@ def render_history(username: str):
                     tabs = st.tabs(list(results.keys()))
                     for tab, (name, df) in zip(tabs, results.items()):
                         with tab:
-                            st.dataframe(df, width="stretch", height=350)
+                            st.dataframe(format_date_columns(df), width="stretch", height=350)
                 else:
                     st.info("无数据")

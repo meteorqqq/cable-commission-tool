@@ -11,6 +11,7 @@ from engine.calculator import (
     load_payment_excel,
     build_contract_overview,
     extract_project_list,
+    format_date_columns,
 )
 from db.database import save_import_snapshots
 
@@ -42,7 +43,7 @@ def _upload_and_load(
     df = st.session_state.get(state_key)
     if df is not None:
         with st.expander(f"预览数据 ({len(df)} 条)", expanded=False):
-            st.dataframe(df.head(100), width="stretch", height=300)
+            st.dataframe(format_date_columns(df.head(100)), width="stretch", height=300)
 
 
 def render_import(username: str):

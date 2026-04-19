@@ -213,6 +213,9 @@ def _normalize_loaded_df(df: pd.DataFrame | None) -> pd.DataFrame | None:
     for dcol in ("发货日期", "回款日期"):
         if dcol in df.columns:
             df[dcol] = pd.to_datetime(df[dcol], errors="coerce")
+    if "销售部门" in df.columns:
+        from engine.calculator import clean_dept_name
+        df["销售部门"] = df["销售部门"].map(clean_dept_name)
     return df
 
 

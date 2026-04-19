@@ -3,7 +3,7 @@
 import streamlit as st
 import pandas as pd
 
-from engine.calculator import list_salespersons, build_salesperson_detail
+from engine.calculator import list_salespersons, build_salesperson_detail, format_date_columns
 
 
 def _fmt_money(v: float) -> str:
@@ -44,9 +44,26 @@ def render_salesperson():
 
     sel = st.selectbox("选择销售员", names, index=default_idx, key="_selected_salesperson")
 
-    detail = build_salesperson_detail(sel, delivery_df, payment_df)
+    profit_df = st.session_state.get("profit_result")
+    timeliness_df = st.session_state.get("timeliness_result")
 
-    c1, c2, c3, c4, c5 = st.columns(5, gap="medium")
+    detail = build_salesperson_detail(
+        sel, delivery_df, payment_df,
+        profit_df=profit_df, timeliness_df=timeliness_df,
+    )
+
+    if profit_df is None or timeliness_df is None:
+        missing = []
+        if profit_df is None:
+            missing.append("利润提成")
+        if timeliness_df is None:
+            missing.append("回款时效提成")
+        st.caption(
+            "未检测到 " + " / ".join(missing) + " 的计算结果，"
+            "请先到对应页面点击「计算」以在此处显示提成明细。"
+        )
+
+    c1, c2, c3, c4, c5, c6 = st.columns(6, gap="medium")
     with c1:
         st.metric("销售部门", detail["销售部门"] or "—")
     with c2:
@@ -56,7 +73,9 @@ def render_salesperson():
     with c4:
         st.metric("总回款额", _fmt_money(detail["总回款额"]))
     with c5:
-        st.metric("未回款额", _fmt_money(detail["未回款额"]))
+        st.metric("利润提成", _fmt_money(detail.get("总利润提成", 0)))
+    with c6:
+        st.metric("时效提成", _fmt_money(detail.get("总时效提成", 0)))
 
     if not detail["合同列表"]:
         st.info("该销售员名下暂无合同")
@@ -77,6 +96,8 @@ def render_salesperson():
             "发货额": c["发货额"],
             "回款额": c["回款额"],
             "未回款额": c["未回款额"],
+            "利润提成": c.get("利润提成", 0.0),
+            "时效提成": c.get("时效提成", 0.0),
             "状态": c["状态"],
         })
     summary_df = pd.DataFrame(summary_rows)
@@ -96,6 +117,8 @@ def render_salesperson():
                 "发货额": st.column_config.NumberColumn(format="%.2f"),
                 "回款额": st.column_config.NumberColumn(format="%.2f"),
                 "未回款额": st.column_config.NumberColumn(format="%.2f"),
+                "利润提成": st.column_config.NumberColumn(format="%.2f"),
+                "时效提成": st.column_config.NumberColumn(format="%.2f"),
             },
         )
 
@@ -115,7 +138,9 @@ def _render_contract_expander(c: dict):
     header = (
         f"{c['工程项目号']}　·　{c['状态']}　·　"
         f"发货 {_fmt_money(c['发货额'])}　/　回款 {_fmt_money(c['回款额'])}　"
-        f"/　未回款 {_fmt_money(c['未回款额'])}"
+        f"/　未回款 {_fmt_money(c['未回款额'])}　·　"
+        f"利润提成 {_fmt_money(c.get('利润提成', 0))}　/　"
+        f"时效提成 {_fmt_money(c.get('时效提成', 0))}"
     )
     with st.expander(header, expanded=False):
         st.markdown(
@@ -127,6 +152,23 @@ def _render_contract_expander(c: dict):
         if c["开票单位"]:
             st.caption("开票单位：" + "　/　".join(c["开票单位"]))
 
+        m1, m2, m3, m4 = st.columns(4, gap="medium")
+        with m1:
+            st.metric("发货额", _fmt_money(c["发货额"]))
+        with m2:
+            st.metric("回款额", _fmt_money(c["回款额"]))
+        with m3:
+            st.metric(
+                "利润提成",
+                _fmt_money(c.get("利润提成", 0)),
+                help=(
+                    f"利润提成率：{c.get('利润提成率', '')}　·　"
+                    f"分类：{c.get('利润分类', '')}"
+                ) if c.get("利润提成率") else None,
+            )
+        with m4:
+            st.metric("回款时效提成", _fmt_money(c.get("时效提成", 0)))
+
         col_d, col_p = st.columns(2, gap="large")
         with col_d:
             st.markdown("**发货明细**")
@@ -134,7 +176,7 @@ def _render_contract_expander(c: dict):
                 st.caption("（无发货记录）")
             else:
                 st.dataframe(
-                    c["发货明细"],
+                    format_date_columns(c["发货明细"]),
                     width="stretch",
                     height=min(280, 45 + len(c["发货明细"]) * 36),
                     column_config={
@@ -147,14 +189,28 @@ def _render_contract_expander(c: dict):
                 st.caption("（无回款记录）")
             else:
                 st.dataframe(
-                    c["回款明细"],
+                    format_date_columns(c["回款明细"]),
                     width="stretch",
                     height=min(280, 45 + len(c["回款明细"]) * 36),
                     column_config={
                         "回款金额": st.column_config.NumberColumn(format="%.2f"),
-                        "核销金额": st.column_config.NumberColumn(format="%.2f"),
                     },
                 )
+
+        tl_df = c.get("时效提成明细")
+        if tl_df is not None and not tl_df.empty:
+            st.markdown("**时效提成明细**")
+            st.dataframe(
+                format_date_columns(tl_df),
+                width="stretch",
+                height=min(260, 45 + len(tl_df) * 36),
+                column_config={
+                    "回款金额": st.column_config.NumberColumn(format="%.2f"),
+                    "时效提成金额": st.column_config.NumberColumn(format="%.2f"),
+                },
+            )
+        elif c.get("时效提成", 0) == 0 and c["回款明细"].empty is False:
+            st.caption("（暂无时效提成记录，请到「回款时效提成」页计算后查看）")
 
 
 def _render_other_section(other: dict):
@@ -166,13 +222,30 @@ def _render_other_section(other: dict):
             f"<span style='color:{color};font-weight:600'>{other['状态']}</span>",
             unsafe_allow_html=True,
         )
-        c1, c2, c3 = st.columns(3, gap="medium")
+        c1, c2, c3, c4, c5 = st.columns(5, gap="medium")
         with c1:
             st.metric("发货额", _fmt_money(other["发货额"]))
         with c2:
             st.metric("回款额", _fmt_money(other["回款额"]))
         with c3:
             st.metric("未回款额", _fmt_money(other["未回款额"]))
+        with c4:
+            st.metric("利润提成", _fmt_money(other.get("利润提成", 0)))
+        with c5:
+            st.metric("时效提成", _fmt_money(other.get("时效提成", 0)))
+
+        tl_df = other.get("时效提成明细")
+        if tl_df is not None and not tl_df.empty:
+            with st.expander("时效提成明细", expanded=False):
+                st.dataframe(
+                    format_date_columns(tl_df),
+                    width="stretch",
+                    height=min(260, 45 + len(tl_df) * 36),
+                    column_config={
+                        "回款金额": st.column_config.NumberColumn(format="%.2f"),
+                        "时效提成金额": st.column_config.NumberColumn(format="%.2f"),
+                    },
+                )
 
         d_df = other["发货明细"]
         p_df = other["回款明细"]
@@ -228,7 +301,7 @@ def _render_unit_tables(d_sub: pd.DataFrame, p_sub: pd.DataFrame, label: str):
             st.caption("（无发货记录）")
         else:
             st.dataframe(
-                d_sub.reset_index(drop=True),
+                format_date_columns(d_sub.reset_index(drop=True)),
                 width="stretch",
                 height=min(260, 45 + len(d_sub) * 36),
                 column_config={
@@ -242,12 +315,11 @@ def _render_unit_tables(d_sub: pd.DataFrame, p_sub: pd.DataFrame, label: str):
             st.caption("（无回款记录）")
         else:
             st.dataframe(
-                p_sub.reset_index(drop=True),
+                format_date_columns(p_sub.reset_index(drop=True)),
                 width="stretch",
                 height=min(260, 45 + len(p_sub) * 36),
                 column_config={
                     "回款金额": st.column_config.NumberColumn(format="%.2f"),
-                    "核销金额": st.column_config.NumberColumn(format="%.2f"),
                 },
                 key=f"other_pay_{label}",
             )

@@ -26,89 +26,335 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
-GLOBAL_CSS = """
-<style>
-/* ── 全局 ── */
+GLOBAL_CSS = """<style>
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
+
+/* ───────── Design Tokens ───────── */
+:root {
+    --color-ink:        #0F172A;   /* primary text */
+    --color-ink-soft:   #475569;   /* secondary text */
+    --color-mute:       #94A3B8;   /* tertiary / labels */
+    --color-bg:         #FFFFFF;
+    --color-surface:    #FAFAF9;   /* card surface */
+    --color-surface-2:  #F4F4F5;   /* subtle stripe */
+    --color-border:     #E5E7EB;
+    --color-border-soft:#EEF0F3;
+    --color-accent:     #D4AF37;   /* gold CTA */
+    --color-accent-700: #B8941F;
+    --color-accent-50:  #FBF5DD;
+    --color-success:    #16A34A;
+    --color-warning:    #F59E0B;
+    --color-danger:     #DC2626;
+    --radius-sm: 6px;
+    --radius:    10px;
+    --radius-lg: 14px;
+    --shadow-sm: 0 1px 2px rgba(15,23,42,0.04);
+    --shadow:    0 1px 3px rgba(15,23,42,0.06), 0 1px 2px rgba(15,23,42,0.04);
+    --shadow-lg: 0 10px 30px rgba(15,23,42,0.08);
+    --transition: 200ms cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+/* ───────── Base ───────── */
+html, body, [class*="stApp"], [class*="css"] {
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, "Segoe UI",
+                 "PingFang SC", "Microsoft YaHei", sans-serif !important;
+    color: var(--color-ink);
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+}
+.stApp { background: var(--color-bg); }
+header[data-testid="stHeader"] { background: transparent; height: 0; }
+
 .block-container {
     padding: 2rem 2.5rem 3rem;
-    max-width: 1400px;
+    max-width: 1480px;
 }
-header[data-testid="stHeader"] { background: transparent; }
 
-/* ── 侧边栏 ── */
+/* ───────── Sidebar ───────── */
 section[data-testid="stSidebar"] > div:first-child {
-    background: linear-gradient(180deg, #1a2332 0%, #243447 100%);
+    background: #0B1220;
+    border-right: 1px solid rgba(255,255,255,0.05);
 }
-[data-testid="stSidebar"] {
-    min-width: 220px;
+[data-testid="stSidebar"] { min-width: 232px; }
+
+[data-testid="stSidebar"] .brand-title {
+    font-size: 1.0rem;
+    font-weight: 700;
+    color: #FFFFFF !important;
+    letter-spacing: 0.4px;
+    padding: 0.4rem 0 0.1rem;
+    display: flex; align-items: center; gap: 0.5rem;
+}
+[data-testid="stSidebar"] .brand-title::before {
+    content: ''; width: 8px; height: 8px; border-radius: 2px;
+    background: var(--color-accent);
+}
+[data-testid="stSidebar"] .brand-sub {
+    font-size: 0.75rem; color: #64748B !important;
+    margin-bottom: 0.6rem; letter-spacing: 0.2px;
+}
+[data-testid="stSidebar"] hr {
+    border-color: rgba(255,255,255,0.06) !important;
+    margin: 0.8rem 0 !important;
 }
 [data-testid="stSidebar"] [data-testid="stMarkdownContainer"] p,
 [data-testid="stSidebar"] [data-testid="stMarkdownContainer"] span {
-    color: #cfd8dc;
-}
-[data-testid="stSidebar"] .brand-title {
-    font-size: 1.05rem; font-weight: 700; color: #ffffff !important;
-    letter-spacing: 0.3px; padding: 0.6rem 0 0.2rem;
-}
-[data-testid="stSidebar"] .brand-sub {
-    font-size: 0.78rem; color: #90a4ae !important; margin-bottom: 0.5rem;
-}
-[data-testid="stSidebar"] hr {
-    border-color: rgba(255,255,255,0.1); margin: 0.8rem 0;
+    color: #CBD5E1;
 }
 
-/* ── 标题 ── */
+/* nav radio: looks like menu items */
+[data-testid="stSidebar"] [role="radiogroup"] {
+    gap: 2px !important;
+}
+[data-testid="stSidebar"] [role="radiogroup"] > label {
+    width: 100%;
+    padding: 0.55rem 0.75rem;
+    border-radius: var(--radius-sm);
+    cursor: pointer;
+    transition: background var(--transition), color var(--transition);
+    color: #CBD5E1 !important;
+    font-size: 0.9rem;
+    font-weight: 500;
+}
+[data-testid="stSidebar"] [role="radiogroup"] > label:hover {
+    background: rgba(255,255,255,0.04);
+    color: #FFFFFF !important;
+}
+[data-testid="stSidebar"] [role="radiogroup"] > label[data-checked="true"],
+[data-testid="stSidebar"] [role="radiogroup"] > label:has(input:checked) {
+    background: rgba(212,175,55,0.10);
+    color: var(--color-accent) !important;
+    border-left: 2px solid var(--color-accent);
+    padding-left: calc(0.75rem - 2px);
+}
+[data-testid="stSidebar"] [role="radiogroup"] > label > div:first-child {
+    display: none !important;       /* hide radio dot */
+}
+
+/* sidebar logout button */
+[data-testid="stSidebar"] .stButton > button {
+    background: transparent !important;
+    color: #CBD5E1 !important;
+    border: 1px solid rgba(255,255,255,0.10) !important;
+    border-radius: var(--radius-sm) !important;
+    font-weight: 500 !important;
+    width: 100%;
+}
+[data-testid="stSidebar"] .stButton > button:hover {
+    background: rgba(255,255,255,0.05) !important;
+    color: #FFFFFF !important;
+    border-color: rgba(255,255,255,0.18) !important;
+}
+
+/* ───────── Headings ───────── */
 .main h1 {
-    font-size: 1.45rem !important; font-weight: 700 !important;
-    color: #1e293b !important; margin-bottom: 1rem !important;
+    font-size: 1.5rem !important;
+    font-weight: 700 !important;
+    color: var(--color-ink) !important;
+    letter-spacing: -0.01em;
+    margin: 0 0 1.25rem 0 !important;
+    padding-bottom: 0.6rem;
+    border-bottom: 1px solid var(--color-border-soft);
 }
-.main h2 {
-    font-size: 1.05rem !important; font-weight: 600 !important;
-    color: #334155 !important; margin-bottom: 0.5rem !important;
+.main h2, .main h3 {
+    font-weight: 600 !important;
+    color: var(--color-ink) !important;
+    letter-spacing: -0.005em;
+}
+.main h2 { font-size: 1.05rem !important; margin: 0 0 0.6rem 0 !important; }
+.main h3 { font-size: 0.95rem !important; margin: 0 0 0.4rem 0 !important; }
+.main p, .main label, .main li { color: var(--color-ink); }
+.main small, .stCaption, [data-testid="stCaptionContainer"] {
+    color: var(--color-mute) !important;
 }
 
-/* ── 指标卡片 ── */
+/* ───────── Metrics ───────── */
 div[data-testid="stMetric"] {
-    background: #f8fafc;
-    border: 1px solid #e2e8f0;
-    border-radius: 12px;
-    padding: 1rem 1.2rem;
+    background: var(--color-surface);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius);
+    padding: 1rem 1.15rem;
+    box-shadow: var(--shadow-sm);
+    transition: border-color var(--transition), box-shadow var(--transition);
+}
+div[data-testid="stMetric"]:hover {
+    border-color: #D4D4D8;
+    box-shadow: var(--shadow);
 }
 div[data-testid="stMetric"] label {
-    color: #64748b !important; font-size: 0.82rem; font-weight: 500;
-    letter-spacing: 0.3px;
+    color: var(--color-mute) !important;
+    font-size: 0.78rem;
+    font-weight: 500;
+    text-transform: uppercase;
+    letter-spacing: 0.6px;
 }
 div[data-testid="stMetric"] [data-testid="stMetricValue"] {
-    color: #1e293b !important; font-weight: 700;
+    color: var(--color-ink) !important;
+    font-weight: 700;
+    font-size: 1.5rem;
+    font-variant-numeric: tabular-nums;
+}
+div[data-testid="stMetric"] [data-testid="stMetricDelta"] {
+    font-size: 0.78rem;
 }
 
-/* ── 按钮 ── */
-.stButton > button {
-    border-radius: 8px; font-weight: 500;
-    transition: all 0.15s;
+/* ───────── Buttons ───────── */
+.stButton > button, .stDownloadButton > button {
+    border-radius: var(--radius-sm);
+    font-weight: 500;
+    border: 1px solid var(--color-border);
+    background: #FFFFFF;
+    color: var(--color-ink);
+    transition: all var(--transition);
+    box-shadow: var(--shadow-sm);
+    cursor: pointer;
 }
-.stDownloadButton > button {
-    border-radius: 8px; font-weight: 500;
+.stButton > button:hover, .stDownloadButton > button:hover {
+    border-color: var(--color-ink);
+    color: var(--color-ink);
+    background: var(--color-surface);
+}
+.stButton > button:focus, .stDownloadButton > button:focus {
+    outline: 2px solid var(--color-accent);
+    outline-offset: 2px;
+    box-shadow: none;
+}
+.stButton > button[kind="primary"] {
+    background: var(--color-ink) !important;
+    color: #FFFFFF !important;
+    border-color: var(--color-ink) !important;
+}
+.stButton > button[kind="primary"]:hover {
+    background: #000000 !important;
+    border-color: #000000 !important;
 }
 
-/* ── 分割线 ── */
-.main hr { border-color: #e2e8f0 !important; }
+/* ───────── Containers (with border) ───────── */
+[data-testid="stVerticalBlockBorderWrapper"] {
+    border-radius: var(--radius) !important;
+    border-color: var(--color-border) !important;
+    background: var(--color-bg);
+    box-shadow: var(--shadow-sm);
+}
 
-/* ── Expander ── */
+/* ───────── Expander ───────── */
 .main [data-testid="stExpander"] {
-    border: 1px solid #e8ecf0; border-radius: 10px;
+    border: 1px solid var(--color-border) !important;
+    border-radius: var(--radius) !important;
+    background: var(--color-bg);
+    box-shadow: var(--shadow-sm);
+    overflow: hidden;
+}
+.main [data-testid="stExpander"] summary {
+    padding: 0.7rem 1rem;
+    font-weight: 500;
+    color: var(--color-ink);
+    transition: background var(--transition);
+    cursor: pointer;
+}
+.main [data-testid="stExpander"] summary:hover {
+    background: var(--color-surface);
 }
 
-/* ── 登录页居中 ── */
-[data-testid="stForm"] {
-    max-width: 400px; margin: 5rem auto 0;
-    background: #ffffff; border: 1px solid #e2e8f0;
-    border-radius: 14px; padding: 2rem 1.8rem 1.5rem;
-    box-shadow: 0 4px 20px rgba(0,0,0,0.05);
+/* ───────── Tabs ───────── */
+.stTabs [data-baseweb="tab-list"] {
+    gap: 0.25rem;
+    border-bottom: 1px solid var(--color-border);
 }
+.stTabs [data-baseweb="tab"] {
+    height: 38px;
+    padding: 0 0.9rem;
+    font-weight: 500;
+    color: var(--color-ink-soft);
+    border-radius: 0;
+    background: transparent;
+    transition: color var(--transition);
+}
+.stTabs [data-baseweb="tab"]:hover { color: var(--color-ink); }
+.stTabs [aria-selected="true"] {
+    color: var(--color-ink) !important;
+    border-bottom: 2px solid var(--color-accent) !important;
+}
+
+/* ───────── DataFrame / data_editor ───────── */
+[data-testid="stDataFrame"], [data-testid="stDataEditor"] {
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius);
+    overflow: hidden;
+    box-shadow: var(--shadow-sm);
+}
+[data-testid="stDataFrame"] [data-baseweb="table-cell"]:hover,
+[data-testid="stDataEditor"] [data-baseweb="table-cell"]:hover {
+    background: var(--color-surface) !important;
+}
+
+/* ───────── Inputs ───────── */
+.stTextInput input, .stNumberInput input,
+.stTextArea textarea, .stSelectbox div[data-baseweb="select"] > div {
+    border-radius: var(--radius-sm) !important;
+    border-color: var(--color-border) !important;
+    transition: border-color var(--transition), box-shadow var(--transition);
+}
+.stTextInput input:focus, .stNumberInput input:focus,
+.stTextArea textarea:focus {
+    border-color: var(--color-ink) !important;
+    box-shadow: 0 0 0 3px rgba(15,23,42,0.06) !important;
+}
+
+/* ───────── Alerts ───────── */
+[data-testid="stAlert"] {
+    border-radius: var(--radius);
+    border: 1px solid var(--color-border);
+    box-shadow: var(--shadow-sm);
+}
+
+/* ───────── Divider ───────── */
+.main hr { border-color: var(--color-border-soft) !important; }
+
+/* ───────── Login form ───────── */
+[data-testid="stForm"] {
+    max-width: 400px;
+    margin: 4rem auto 0;
+    background: #FFFFFF;
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-lg);
+    padding: 2rem 1.8rem 1.5rem;
+    box-shadow: var(--shadow-lg);
+}
+[data-testid="stForm"] .stButton > button {
+    background: var(--color-ink);
+    color: #FFFFFF;
+    border-color: var(--color-ink);
+    width: 100%;
+    padding: 0.55rem 1rem;
+}
+[data-testid="stForm"] .stButton > button:hover {
+    background: #000;
+    border-color: #000;
+}
+
+/* ───────── Tabular numerals everywhere monetary numbers appear ───────── */
+[data-testid="stMetricValue"], [data-testid="stDataFrame"] td,
+[data-testid="stDataEditor"] td {
+    font-variant-numeric: tabular-nums;
+}
+
+/* ───────── Reduced motion ───────── */
+@media (prefers-reduced-motion: reduce) {
+    * { transition: none !important; animation: none !important; }
+}
+
+/* ───────── Scrollbar ───────── */
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: #E2E8F0; border-radius: 6px; }
+::-webkit-scrollbar-thumb:hover { background: #CBD5E1; }
 </style>
 """
-st.markdown(GLOBAL_CSS, unsafe_allow_html=True)
+if hasattr(st, "html"):
+    st.html(GLOBAL_CSS)
+else:
+    st.markdown(GLOBAL_CSS, unsafe_allow_html=True)
 
 NAV_ITEMS = [
     "数据导入",
@@ -137,7 +383,23 @@ def main():
         config["cookie"]["expiry_days"],
     )
 
-    authenticator.login(location="main")
+    if st.session_state.get("authentication_status") is not True:
+        login_brand = """<div style="max-width:400px;margin:5rem auto 0;text-align:center;"><div style="display:inline-flex;align-items:center;gap:.55rem;padding:.35rem .75rem;border:1px solid #E5E7EB;border-radius:999px;font-size:.74rem;font-weight:600;letter-spacing:.06em;color:#475569;background:#FAFAF9;"><span style="width:6px;height:6px;border-radius:2px;background:#D4AF37;"></span>电缆销售提成审核系统</div><h2 style="margin:1rem 0 .25rem;font-size:1.6rem;font-weight:700;letter-spacing:-.01em;color:#0F172A;">电缆提成计算工具</h2><p style="margin:0;color:#94A3B8;font-size:.88rem;">请使用授权账户登录以继续</p></div>"""
+        if hasattr(st, "html"):
+            st.html(login_brand)
+        else:
+            st.markdown(login_brand, unsafe_allow_html=True)
+
+    authenticator.login(
+        location="main",
+        fields={
+            "Form name": "账户登录",
+            "Username": "用户名",
+            "Password": "密码",
+            "Login": "登 录",
+            "Captcha": "验证码",
+        },
+    )
 
     if st.session_state.get("authentication_status") is None:
         return
@@ -149,9 +411,28 @@ def main():
     username = st.session_state.get("username", "")
     display_name = st.session_state.get("name", username)
 
+    initial = (display_name[:1] if display_name else username[:1] or "U").upper()
+    sidebar_brand = (
+        '<div class="brand-title">电缆提成计算</div>'
+        '<div class="brand-sub">销售提成审核工作台</div>'
+        '<div style="display:flex;align-items:center;gap:.6rem;'
+        'padding:.55rem .65rem;margin:.4rem 0 .25rem;'
+        'background:rgba(255,255,255,.04);'
+        'border:1px solid rgba(255,255,255,.06);border-radius:8px;">'
+        f'<div style="width:28px;height:28px;border-radius:6px;'
+        f'background:#D4AF37;color:#0B1220;display:flex;'
+        f'align-items:center;justify-content:center;'
+        f'font-weight:700;font-size:.85rem;">{initial}</div>'
+        '<div style="display:flex;flex-direction:column;line-height:1.15;">'
+        f'<span style="color:#FFF;font-size:.85rem;font-weight:600;">{display_name}</span>'
+        f'<span style="color:#64748B;font-size:.7rem;">@{username}</span>'
+        '</div></div>'
+    )
     with st.sidebar:
-        st.markdown('<div class="brand-title">电缆提成计算</div>', unsafe_allow_html=True)
-        st.markdown(f'<div class="brand-sub">{display_name}</div>', unsafe_allow_html=True)
+        if hasattr(st, "html"):
+            st.html(sidebar_brand)
+        else:
+            st.markdown(sidebar_brand, unsafe_allow_html=True)
         authenticator.logout("退出登录", "sidebar")
         st.divider()
         page = st.radio("nav", NAV_ITEMS, label_visibility="collapsed")

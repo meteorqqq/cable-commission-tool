@@ -9,9 +9,69 @@
 
 from __future__ import annotations
 
+import re
+
 import pandas as pd
 import numpy as np
 from dataclasses import dataclass, field
+
+
+_DEPT_CODE_RE = re.compile(r"^[\s]*\d[\d]*\s*\|?\s*")
+_DEPT_PREFIX_RE = re.compile(r"^[\s]*\d[\d]*\s*[-－—_]\s*")
+
+
+def clean_dept_name(value) -> str:
+    """去掉销售部门字段中的编号前缀，保留中文名称。
+
+    例如:
+        "020201|02-国网事业部" -> "国网事业部"
+        "010801|01-渠道事业部" -> "渠道事业部"
+        "020201" / "" / NaN     -> ""
+    """
+    if value is None:
+        return ""
+    try:
+        if pd.isna(value):
+            return ""
+    except (TypeError, ValueError):
+        pass
+    s = str(value).strip()
+    if not s or s.lower() in ("nan", "none"):
+        return ""
+    if "|" in s:
+        s = s.split("|", 1)[1].strip()
+    s = _DEPT_PREFIX_RE.sub("", s).strip()
+    return s
+
+
+def _normalize_dept_column(df: pd.DataFrame) -> pd.DataFrame:
+    if "销售部门" in df.columns:
+        df["销售部门"] = df["销售部门"].map(clean_dept_name)
+    return df
+
+
+def format_date_columns(
+    df: pd.DataFrame | None,
+    cols: list[str] | None = None,
+) -> pd.DataFrame:
+    """展示前把 datetime / date 列格式化为 'YYYY-MM-DD' 字符串(NaT->空)。
+
+    若 cols 为 None，则自动识别所有 datetime 类型列。返回新副本。
+    """
+    if df is None or df.empty:
+        return df if df is not None else pd.DataFrame()
+
+    out = df.copy()
+    if cols is None:
+        cols = [c for c in out.columns if pd.api.types.is_datetime64_any_dtype(out[c])]
+    for c in cols:
+        if c not in out.columns:
+            continue
+        s = out[c]
+        if not pd.api.types.is_datetime64_any_dtype(s):
+            s = pd.to_datetime(s, errors="coerce")
+        out[c] = s.dt.strftime("%Y-%m-%d").where(s.notna(), "")
+    return out
 
 
 # ── 默认规则 ─────────────────────────────────────────────────
@@ -133,6 +193,7 @@ def load_delivery_excel(path: str) -> pd.DataFrame:
 
     df["发货金额"] = pd.to_numeric(df["发货金额"], errors="coerce").fillna(0)
     df["发货日期"] = pd.to_datetime(df["发货日期"], errors="coerce")
+    df = _normalize_dept_column(df)
     return df.reset_index(drop=True)
 
 
@@ -174,6 +235,7 @@ def load_payment_excel(path: str) -> pd.DataFrame:
 
     df["回款金额"] = pd.to_numeric(df["回款金额"], errors="coerce").fillna(0)
     df["回款日期"] = pd.to_datetime(df["回款日期"], errors="coerce")
+    df = _normalize_dept_column(df)
     return df.reset_index(drop=True)
 
 
@@ -286,30 +348,67 @@ def build_salesperson_detail(
     salesperson: str,
     delivery_df: pd.DataFrame | None,
     payment_df: pd.DataFrame | None,
+    profit_df: pd.DataFrame | None = None,
+    timeliness_df: pd.DataFrame | None = None,
 ) -> dict:
     """返回某销售员的所有合同明细与汇总。
 
+    若提供 profit_df / timeliness_df（来自利润提成 / 回款时效提成的计算结果），
+    每个合同会额外附带利润提成额、时效提成额及时效提成明细。
+
     结构:
         {
-            "销售员": str,
-            "销售部门": str,
+            "销售员": str, "销售部门": str,
             "总发货额": float, "总回款额": float, "未回款额": float,
+            "总利润提成": float, "总时效提成": float,
             "合同数": int,
             "合同列表": [
                 {
                     "工程项目号": str,   # "其他" 表示无合同号
-                    "订货单位": list[str],
-                    "开票单位": list[str],
-                    "发货明细": DataFrame(发货日期/发货金额/订货单位/开票单位),
-                    "回款明细": DataFrame(回款日期/回款金额/开票单位/核销金额),
+                    "订货单位": list[str], "开票单位": list[str],
+                    "发货明细": DataFrame, "回款明细": DataFrame,
                     "发货额": float, "回款额": float, "未回款额": float,
-                    "状态": "已完成" | "未发货" | "部分回款" | "未回款",
+                    "状态": "已完成" | ... ,
+                    "利润提成": float, "利润提成率": str, "利润分类": str,
+                    "时效提成": float,
+                    "时效提成明细": DataFrame(回款日期/匹配发货日期/回款周期(天)/时效提成比例/时效提成金额),
                 }, ...
             ]
         }
     """
     dept_map = _build_salesperson_dept_map(delivery_df, payment_df)
     dept = dept_map.get(salesperson, "")
+
+    profit_lookup: dict[str, dict] = {}
+    if profit_df is not None and not profit_df.empty and "销售员" in profit_df.columns:
+        sub = profit_df[profit_df["销售员"].astype(str) == salesperson]
+        for _, r in sub.iterrows():
+            pid = str(r.get("工程项目号", "")).strip()
+            if not pid:
+                continue
+            try:
+                amt = float(r.get("利润提成金额", 0) or 0)
+            except (TypeError, ValueError):
+                amt = 0.0
+            profit_lookup[pid] = {
+                "利润提成": round(amt, 2),
+                "利润提成率": str(r.get("利润提成率", "")),
+                "利润分类": str(r.get("利润分类", "")),
+            }
+
+    tl_grouped: dict[str, pd.DataFrame] = {}
+    tl_amount: dict[str, float] = {}
+    if timeliness_df is not None and not timeliness_df.empty and "销售员" in timeliness_df.columns:
+        sub = timeliness_df[timeliness_df["销售员"].astype(str) == salesperson]
+        cols_pref = ["回款日期", "回款金额", "匹配发货日期", "回款周期(天)",
+                     "时效提成比例", "时效提成金额"]
+        for pid, grp in sub.groupby(sub["工程项目号"].astype(str)):
+            keep = [c for c in cols_pref if c in grp.columns]
+            tl_grouped[pid] = grp[keep].reset_index(drop=True)
+            tl_amount[pid] = round(
+                float(pd.to_numeric(grp.get("时效提成金额", 0), errors="coerce").fillna(0).sum()),
+                2,
+            )
 
     def _empty(cols):
         return pd.DataFrame(columns=cols)
@@ -372,12 +471,13 @@ def build_salesperson_detail(
                 bag.update(str(x).strip() for x in p[col_src].dropna().unique() if str(x).strip())
 
         d_cols = [c for c in ["发货日期", "发货金额", "订货单位", "开票单位"] if c in d.columns]
-        p_cols = [c for c in ["回款日期", "回款金额", "开票单位", "核销金额", "订货单位"]
+        p_cols = [c for c in ["回款日期", "回款金额", "开票单位", "订货单位"]
                   if c in p.columns]
 
         d_show = d[d_cols].sort_values("发货日期") if "发货日期" in d_cols else d[d_cols]
         p_show = p[p_cols].sort_values("回款日期") if "回款日期" in p_cols else p[p_cols]
 
+        prof = profit_lookup.get(pid, {})
         contracts.append({
             "工程项目号": pid,
             "订货单位": sorted(customers),
@@ -388,7 +488,15 @@ def build_salesperson_detail(
             "回款额": round(p_amt, 2),
             "未回款额": round(max(d_amt - p_amt, 0), 2),
             "状态": status,
+            "利润提成": prof.get("利润提成", 0.0),
+            "利润提成率": prof.get("利润提成率", ""),
+            "利润分类": prof.get("利润分类", ""),
+            "时效提成": tl_amount.get(pid, 0.0),
+            "时效提成明细": tl_grouped.get(pid, pd.DataFrame()),
         })
+
+    total_profit = round(sum(c["利润提成"] for c in contracts), 2)
+    total_timeliness = round(sum(c["时效提成"] for c in contracts), 2)
 
     return {
         "销售员": salesperson,
@@ -396,6 +504,8 @@ def build_salesperson_detail(
         "总发货额": round(total_del, 2),
         "总回款额": round(total_pay, 2),
         "未回款额": round(max(total_del - total_pay, 0), 2),
+        "总利润提成": total_profit,
+        "总时效提成": total_timeliness,
         "合同数": len(contracts),
         "合同列表": contracts,
     }
