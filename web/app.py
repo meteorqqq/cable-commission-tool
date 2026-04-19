@@ -21,7 +21,7 @@ from web.page_salesperson import render_salesperson
 from db.database import load_import_snapshots
 
 st.set_page_config(
-    page_title="电缆提成计算工具",
+    page_title="锐洋集团提成计算工具",
     layout="wide",
     initial_sidebar_state="expanded",
 )
@@ -403,7 +403,7 @@ def main():
     )
 
     if st.session_state.get("authentication_status") is not True:
-        login_brand = """<div style="max-width:400px;margin:5rem auto 0;text-align:center;"><div style="display:inline-flex;align-items:center;gap:.55rem;padding:.35rem .75rem;border:1px solid #E5E7EB;border-radius:999px;font-size:.74rem;font-weight:600;letter-spacing:.06em;color:#475569;background:#FAFAF9;"><span style="width:6px;height:6px;border-radius:2px;background:#D4AF37;"></span>电缆销售提成审核系统</div><h2 style="margin:1rem 0 .25rem;font-size:1.6rem;font-weight:700;letter-spacing:-.01em;color:#0F172A;">电缆提成计算工具</h2><p style="margin:0;color:#94A3B8;font-size:.88rem;">请使用授权账户登录以继续</p></div>"""
+        login_brand = """<div style="max-width:400px;margin:5rem auto 0;text-align:center;"><div style="display:inline-flex;align-items:center;gap:.55rem;padding:.35rem .75rem;border:1px solid #E5E7EB;border-radius:999px;font-size:.74rem;font-weight:600;letter-spacing:.06em;color:#475569;background:#FAFAF9;"><span style="width:6px;height:6px;border-radius:2px;background:#D4AF37;"></span>锐洋集团 · 销售提成审核系统</div><h2 style="margin:1rem 0 .25rem;font-size:1.6rem;font-weight:700;letter-spacing:-.01em;color:#0F172A;">锐洋集团提成计算工具</h2><p style="margin:0;color:#94A3B8;font-size:.88rem;">请使用授权账户登录以继续</p></div>"""
         if hasattr(st, "html"):
             st.html(login_brand)
         else:
@@ -432,7 +432,7 @@ def main():
 
     initial = (display_name[:1] if display_name else username[:1] or "U").upper()
     sidebar_brand = (
-        '<div class="brand-title">电缆提成计算</div>'
+        '<div class="brand-title">锐洋集团提成计算</div>'
         '<div class="brand-sub">销售提成审核工作台</div>'
         '<div style="display:flex;align-items:center;gap:.6rem;'
         'padding:.55rem .65rem;margin:.4rem 0 .25rem;'
