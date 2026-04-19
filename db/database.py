@@ -204,11 +204,18 @@ def save_import_snapshots(
 def _normalize_loaded_df(df: pd.DataFrame | None) -> pd.DataFrame | None:
     if df is None or df.empty:
         return df
-    if "工程项目号" in df.columns:
-        df["工程项目号"] = df["工程项目号"].astype("string").str.strip()
+    rename_map = {}
+    for old in ("工程项目号", "合同号", "项目号"):
+        if old in df.columns and "合同编号" not in df.columns:
+            rename_map[old] = "合同编号"
+            break
+    if rename_map:
+        df = df.rename(columns=rename_map)
+    if "合同编号" in df.columns:
+        df["合同编号"] = df["合同编号"].astype("string").str.strip()
         df.loc[
-            df["工程项目号"].isin(["", "nan", "None"]) | df["工程项目号"].isna(),
-            "工程项目号",
+            df["合同编号"].isin(["", "nan", "None"]) | df["合同编号"].isna(),
+            "合同编号",
         ] = "其他"
     for dcol in ("发货日期", "回款日期"):
         if dcol in df.columns:

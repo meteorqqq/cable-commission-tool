@@ -55,7 +55,7 @@ class ContractPrice(Base):
 
 
 class ImportedSnapshot(Base):
-    """用户最近一次导入的交货/回款全量明细（含全部工程项目号及行级数据）"""
+    """用户最近一次导入的交货/回款全量明细（含全部合同编号及行级数据）"""
 
     __tablename__ = "imported_snapshots"
 

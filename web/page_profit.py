@@ -32,8 +32,8 @@ def _build_price_df(username: str) -> pd.DataFrame:
     saved_prices = {p["project_id"]: p for p in load_contract_prices(username)}
 
     proj_totals = {}
-    if delivery_df is not None and "工程项目号" in delivery_df.columns:
-        for pid, grp in delivery_df.groupby("工程项目号"):
+    if delivery_df is not None and "合同编号" in delivery_df.columns:
+        for pid, grp in delivery_df.groupby("合同编号"):
             proj_totals[pid] = round(grp["发货金额"].sum(), 2)
 
     rows = []
@@ -41,17 +41,17 @@ def _build_price_df(username: str) -> pd.DataFrame:
         if pid in saved_prices:
             sp = saved_prices[pid]
             rows.append({
-                "工程项目号": pid,
+                "合同编号": pid,
                 "指导价": sp["guide_price"],
                 "合同价": sp["contract_price"],
                 "成本价": sp["cost_price"],
             })
         else:
             total = proj_totals.get(pid, 0)
-            rows.append({"工程项目号": pid, "指导价": total, "合同价": total, "成本价": 0.0})
+            rows.append({"合同编号": pid, "指导价": total, "合同价": total, "成本价": 0.0})
 
     if not rows:
-        return pd.DataFrame(columns=["工程项目号", "指导价", "合同价", "成本价"])
+        return pd.DataFrame(columns=["合同编号", "指导价", "合同价", "成本价"])
     out = pd.DataFrame(rows)
     for c in ("指导价", "合同价", "成本价"):
         out[c] = pd.to_numeric(out[c], errors="coerce")
@@ -118,7 +118,7 @@ def render_profit(username: str):
             price_df,
             width="stretch",
             key="price_editor",
-            disabled=["工程项目号"],
+            disabled=["合同编号"],
             height=300,
             column_config={
                 "指导价": st.column_config.NumberColumn(
@@ -142,7 +142,7 @@ def render_profit(username: str):
                     cp = pd.to_numeric(r["合同价"], errors="coerce")
                     cos = pd.to_numeric(r["成本价"], errors="coerce")
                     rows.append({
-                        "project_id": r["工程项目号"],
+                        "project_id": r["合同编号"],
                         "guide_price": float(0 if pd.isna(gp) else gp),
                         "contract_price": float(0 if pd.isna(cp) else cp),
                         "cost_price": float(0 if pd.isna(cos) else cos),
@@ -153,7 +153,7 @@ def render_profit(username: str):
             if st.button("计算利润提成", type="primary", use_container_width=True):
                 prices = {}
                 for _, r in edited_prices.iterrows():
-                    pid = r["工程项目号"]
+                    pid = r["合同编号"]
                     gp = pd.to_numeric(r["指导价"], errors="coerce")
                     cp = pd.to_numeric(r["合同价"], errors="coerce")
                     cos = pd.to_numeric(r["成本价"], errors="coerce")

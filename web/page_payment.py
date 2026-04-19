@@ -45,18 +45,18 @@ def _build_contract_summary(
     rows: dict[tuple[str, str], dict] = {}
 
     if delivery_df is not None and not delivery_df.empty:
-        grp = delivery_df.groupby(["工程项目号", "销售员"])["发货金额"].sum()
+        grp = delivery_df.groupby(["合同编号", "销售员"])["发货金额"].sum()
         for (pid, sp), amt in grp.items():
             rows.setdefault((str(pid), str(sp)), {})["发货额"] = float(amt)
 
     if payment_df is not None and not payment_df.empty:
-        grp = payment_df.groupby(["工程项目号", "销售员"])["回款金额"].sum()
+        grp = payment_df.groupby(["合同编号", "销售员"])["回款金额"].sum()
         for (pid, sp), amt in grp.items():
             rows.setdefault((str(pid), str(sp)), {})["回款额"] = float(amt)
 
     tl_grp = {}
     if timeliness_df is not None and not timeliness_df.empty:
-        for (pid, sp), grp in timeliness_df.groupby(["工程项目号", "销售员"]):
+        for (pid, sp), grp in timeliness_df.groupby(["合同编号", "销售员"]):
             tl_grp[(str(pid), str(sp))] = float(
                 pd.to_numeric(grp["时效提成金额"], errors="coerce").fillna(0).sum()
             )
@@ -76,7 +76,7 @@ def _build_contract_summary(
         d_amt = round(v.get("发货额", 0.0), 2)
         p_amt = round(v.get("回款额", 0.0), 2)
         out.append({
-            "工程项目号": pid,
+            "合同编号": pid,
             "销售员": sp,
             "销售部门": dept_map.get(sp, ""),
             "发货额": d_amt,
@@ -89,7 +89,7 @@ def _build_contract_summary(
     df = pd.DataFrame(out)
     if df.empty:
         return df
-    df["_sort"] = df["工程项目号"].apply(lambda x: (1 if x == "其他" else 0, x))
+    df["_sort"] = df["合同编号"].apply(lambda x: (1 if x == "其他" else 0, x))
     return df.sort_values(["_sort", "销售员"]).drop(columns=["_sort"]).reset_index(drop=True)
 
 
@@ -196,7 +196,7 @@ def render_payment(username: str):
         if filter_status and row["状态"] not in filter_status:
             continue
 
-        pid = row["工程项目号"]
+        pid = row["合同编号"]
         sp = row["销售员"]
         color = _status_color(row["状态"])
 
@@ -215,15 +215,15 @@ def render_payment(username: str):
                 st.caption("销售部门：" + row["销售部门"])
 
             d_sub = delivery_df[
-                (delivery_df["工程项目号"].astype(str) == pid)
+                (delivery_df["合同编号"].astype(str) == pid)
                 & (delivery_df["销售员"].astype(str) == sp)
             ].copy()
             p_sub = payment_df[
-                (payment_df["工程项目号"].astype(str) == pid)
+                (payment_df["合同编号"].astype(str) == pid)
                 & (payment_df["销售员"].astype(str) == sp)
             ].copy()
             tl_sub = timeliness_df[
-                (timeliness_df["工程项目号"].astype(str) == pid)
+                (timeliness_df["合同编号"].astype(str) == pid)
                 & (timeliness_df["销售员"].astype(str) == sp)
             ].copy() if not timeliness_df.empty else pd.DataFrame()
 

@@ -87,12 +87,12 @@ def render_import(username: str):
     pd_df = st.session_state.get("payment_df")
     with c3:
         n_union = len(extract_project_list(dd, pd_df))
-        st.metric("工程项目号（去重）", f"{n_union} 个")
+        st.metric("合同编号（去重）", f"{n_union} 个")
 
     if dd is not None or pd_df is not None:
         overview = build_contract_overview(dd, pd_df)
         if not overview.empty:
             st.markdown("")
             with st.container(border=True):
-                st.subheader("工程项目号汇总")
+                st.subheader("合同编号汇总")
                 st.dataframe(overview, width="stretch", height=min(400, 35 + len(overview) * 36))

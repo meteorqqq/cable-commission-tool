@@ -109,7 +109,7 @@ def render_total(username: str):
                 st.session_state.get("payment_df"),
             )
             if ov is not None and not ov.empty:
-                sheets["工程项目号汇总"] = ov
+                sheets["合同编号汇总"] = ov
             for key, state_key in [
                 ("交货明细", "delivery_df"),
                 ("回款明细", "payment_df"),
@@ -147,7 +147,7 @@ def render_total(username: str):
                     st.session_state.get("payment_df"),
                 )
                 if ov is not None and not ov.empty:
-                    results["工程项目号汇总"] = ov
+                    results["合同编号汇总"] = ov
                 for key, state_key in [
                     ("交货明细", "delivery_df"),
                     ("回款明细", "payment_df"),

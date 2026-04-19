@@ -83,15 +83,15 @@ def render_salesperson():
 
     st.markdown("")
 
-    normal_contracts = [c for c in detail["合同列表"] if c["工程项目号"] != "其他"]
+    normal_contracts = [c for c in detail["合同列表"] if c["合同编号"] != "其他"]
     other_contract = next(
-        (c for c in detail["合同列表"] if c["工程项目号"] == "其他"), None
+        (c for c in detail["合同列表"] if c["合同编号"] == "其他"), None
     )
 
     summary_rows = []
     for c in detail["合同列表"]:
         summary_rows.append({
-            "工程项目号": c["工程项目号"],
+            "合同编号": c["合同编号"],
             "订货单位": " / ".join(c["订货单位"]) if c["订货单位"] else "",
             "发货额": c["发货额"],
             "回款额": c["回款额"],
@@ -136,7 +136,7 @@ def render_salesperson():
 def _render_contract_expander(c: dict):
     color = _status_color(c["状态"])
     header = (
-        f"{c['工程项目号']}　·　{c['状态']}　·　"
+        f"{c['合同编号']}　·　{c['状态']}　·　"
         f"发货 {_fmt_money(c['发货额'])}　/　回款 {_fmt_money(c['回款额'])}　"
         f"/　未回款 {_fmt_money(c['未回款额'])}　·　"
         f"利润提成 {_fmt_money(c.get('利润提成', 0))}　/　"
