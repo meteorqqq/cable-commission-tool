@@ -63,7 +63,26 @@ html, body, [class*="stApp"], [class*="css"] {
     text-rendering: optimizeLegibility;
 }
 .stApp { background: var(--color-bg); }
-header[data-testid="stHeader"] { background: transparent; height: 0; }
+
+/* ───────── 隐藏 Streamlit Cloud / 框架的品牌元素 ───────── */
+header[data-testid="stHeader"]            { display: none !important; height: 0 !important; }
+[data-testid="stToolbar"]                 { display: none !important; }
+[data-testid="stToolbarActions"]          { display: none !important; }
+[data-testid="stDecoration"]              { display: none !important; }
+[data-testid="stStatusWidget"]            { display: none !important; }
+[data-testid="manage-app-button"]         { display: none !important; }
+.stDeployButton                            { display: none !important; }
+button[data-testid="stBaseButton-header"] { display: none !important; }
+#MainMenu                                  { display: none !important; }
+footer                                     { display: none !important; }
+a[href*="streamlit.io"]                    { display: none !important; }
+iframe[title*="streamlit"]                 { display: none !important; }
+.viewerBadge_container__1QSob,
+.viewerBadge_link__1S137,
+[class*="viewerBadge"]                     { display: none !important; }
+/* GitHub Fork 按钮（来自 Cloud viewer） */
+[class*="ProfileContainer"],
+[data-testid="stAppViewBlockContainer"] > div > div > a[href*="github.com"]:first-child { display: none !important; }
 
 .block-container {
     padding: 2rem 2.5rem 3rem;
