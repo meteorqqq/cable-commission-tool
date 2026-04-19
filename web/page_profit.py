@@ -9,7 +9,9 @@ import pandas as pd
 from engine.calculator import (
     calc_profit_commission, ContractPricing, extract_project_list,
     load_contract_pricing_excel, DEFAULT_PROFIT_BASE_RATE, DEFAULT_PROFIT_K_MAX,
+    invoice_units_by_contract, invoice_units_by_contract_sp,
 )
+from web._ui import truncate_units_text
 from db.database import (
     save_rules, load_rules, save_contract_prices, load_contract_prices,
 )
@@ -18,7 +20,7 @@ from db.database import (
 def _profit_result_for_arrow(df: pd.DataFrame) -> pd.DataFrame:
     """消除空字符串与数值混用的 object 列，避免 Streamlit/pyarrow 序列化失败。"""
     out = df.copy()
-    for c in ("合同回款额", "指导价", "合同价", "成本价", "K系数", "利润提成金额"):
+    for c in ("合同发货额", "合同回款额", "指导价", "合同价", "成本价", "K系数", "利润提成金额"):
         if c in out.columns:
             out[c] = pd.to_numeric(out[c], errors="coerce")
     return out
@@ -30,6 +32,7 @@ def _build_price_df(username: str) -> pd.DataFrame:
     projects = extract_project_list(delivery_df, payment_df)
 
     saved_prices = {p["project_id"]: p for p in load_contract_prices(username)}
+    inv_map = invoice_units_by_contract(delivery_df, payment_df)
 
     proj_totals = {}
     if delivery_df is not None and "合同编号" in delivery_df.columns:
@@ -38,20 +41,25 @@ def _build_price_df(username: str) -> pd.DataFrame:
 
     rows = []
     for pid in projects:
+        inv = inv_map.get(pid, "")
         if pid in saved_prices:
             sp = saved_prices[pid]
             rows.append({
                 "合同编号": pid,
+                "开票单位": inv,
                 "指导价": sp["guide_price"],
                 "合同价": sp["contract_price"],
                 "成本价": sp["cost_price"],
             })
         else:
             total = proj_totals.get(pid, 0)
-            rows.append({"合同编号": pid, "指导价": total, "合同价": total, "成本价": 0.0})
+            rows.append({
+                "合同编号": pid, "开票单位": inv,
+                "指导价": total, "合同价": total, "成本价": 0.0,
+            })
 
     if not rows:
-        return pd.DataFrame(columns=["合同编号", "指导价", "合同价", "成本价"])
+        return pd.DataFrame(columns=["合同编号", "开票单位", "指导价", "合同价", "成本价"])
     out = pd.DataFrame(rows)
     for c in ("指导价", "合同价", "成本价"):
         out[c] = pd.to_numeric(out[c], errors="coerce")
@@ -118,9 +126,12 @@ def render_profit(username: str):
             price_df,
             width="stretch",
             key="price_editor",
-            disabled=["合同编号"],
+            disabled=["合同编号", "开票单位"],
             height=300,
             column_config={
+                "开票单位": st.column_config.TextColumn(
+                    "开票单位", help="按合同编号自动汇总（来自交货 / 回款明细），仅供识别。",
+                ),
                 "指导价": st.column_config.NumberColumn(
                     "指导价", format="%.2f", min_value=None, step=0.01
                 ),
@@ -175,8 +186,70 @@ def render_profit(username: str):
     result = st.session_state.get("profit_result")
     if result is not None and not result.empty:
         display_df = _profit_result_for_arrow(result)
+        if (
+            "合同编号" in display_df.columns
+            and "销售员" in display_df.columns
+            and "开票单位" not in display_df.columns
+        ):
+            inv_sp_map = invoice_units_by_contract_sp(delivery_df, payment_df)
+            inv_map = invoice_units_by_contract(delivery_df, payment_df)
+            keys = list(zip(display_df["合同编号"].astype(str), display_df["销售员"].astype(str)))
+            display_df.insert(
+                display_df.columns.get_loc("合同编号") + 1,
+                "开票单位",
+                [inv_sp_map.get(k) or inv_map.get(k[0], "") for k in keys],
+            )
+
         with st.container(border=True):
             st.subheader("计算结果")
-            st.dataframe(display_df, width="stretch", height=400)
+
+            m1, m2, m3, m4 = st.columns(4, gap="medium")
+            total_n = len(display_df)
+            commissioned_n = int((display_df.get("利润提成金额", pd.Series(dtype=float)).fillna(0) > 0).sum())
+            total_pay = float(pd.to_numeric(display_df.get("合同回款额", 0), errors="coerce").fillna(0).sum())
+            total_commission = float(pd.to_numeric(display_df.get("利润提成金额", 0), errors="coerce").fillna(0).sum())
+            with m1:
+                st.metric("合同总数", f"{total_n}")
+            with m2:
+                st.metric("已结提成合同", f"{commissioned_n}")
+            with m3:
+                st.metric("回款合计", f"{total_pay:,.2f}")
+            with m4:
+                st.metric("利润提成合计", f"{total_commission:,.2f}")
+
+            if "状态" in display_df.columns:
+                status_options = ["已完成", "部分回款", "未回款", "未发货", "未发货（已收款）"]
+                status_options = [s for s in status_options if s in set(display_df["状态"].unique())]
+                picked = st.multiselect(
+                    "按状态筛选",
+                    options=status_options,
+                    default=[],
+                    key="profit_filter_status",
+                )
+                if picked:
+                    display_df = display_df[display_df["状态"].isin(picked)]
+
+            view_df = display_df.copy()
+            if "开票单位" in view_df.columns:
+                view_df["开票单位"] = view_df["开票单位"].apply(
+                    lambda s: truncate_units_text(s, max_n=2, max_chars=18)
+                )
+            st.dataframe(
+                view_df,
+                width="stretch",
+                height=420,
+                column_config={
+                    "开票单位": st.column_config.TextColumn(
+                        "开票单位", help="多家时仅显示前几家。"
+                    ),
+                    "合同发货额": st.column_config.NumberColumn(format="%.2f"),
+                    "合同回款额": st.column_config.NumberColumn(format="%.2f"),
+                    "指导价": st.column_config.NumberColumn(format="%.2f"),
+                    "合同价": st.column_config.NumberColumn(format="%.2f"),
+                    "成本价": st.column_config.NumberColumn(format="%.2f"),
+                    "K系数": st.column_config.NumberColumn(format="%.4f"),
+                    "利润提成金额": st.column_config.NumberColumn(format="%.2f"),
+                },
+            )
             csv = display_df.to_csv(index=False).encode("utf-8-sig")
             st.download_button("下载结果 CSV", csv, "利润提成.csv", "text/csv")

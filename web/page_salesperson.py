@@ -4,23 +4,13 @@ import streamlit as st
 import pandas as pd
 
 from engine.calculator import list_salespersons, build_salesperson_detail, format_date_columns
+from web._ui import (
+    fmt_money, truncate_units_text,
+    status_badge, unit_pills, kpi_row, meta_row, section_title,
+)
 
 
-def _fmt_money(v: float) -> str:
-    try:
-        return f"{float(v):,.2f}"
-    except Exception:
-        return str(v)
-
-
-def _status_color(status: str) -> str:
-    return {
-        "已完成": "#16a34a",
-        "部分回款": "#f59e0b",
-        "未回款": "#ef4444",
-        "未发货": "#64748b",
-        "未发货（已收款）": "#0ea5e9",
-    }.get(status, "#64748b")
+_fmt_money = fmt_money
 
 
 def render_salesperson():
@@ -90,9 +80,10 @@ def render_salesperson():
 
     summary_rows = []
     for c in detail["合同列表"]:
+        units_str = " / ".join(c["订货单位"]) if c["订货单位"] else ""
         summary_rows.append({
             "合同编号": c["合同编号"],
-            "订货单位": " / ".join(c["订货单位"]) if c["订货单位"] else "",
+            "订货单位": truncate_units_text(units_str, max_n=2, max_chars=18),
             "发货额": c["发货额"],
             "回款额": c["回款额"],
             "未回款额": c["未回款额"],
@@ -114,6 +105,9 @@ def render_salesperson():
             width="stretch",
             height=min(400, 45 + len(summary_df) * 36),
             column_config={
+                "订货单位": st.column_config.TextColumn(
+                    "订货单位", help="多家时仅显示前几家，完整列表见下方明细。"
+                ),
                 "发货额": st.column_config.NumberColumn(format="%.2f"),
                 "回款额": st.column_config.NumberColumn(format="%.2f"),
                 "未回款额": st.column_config.NumberColumn(format="%.2f"),
@@ -134,44 +128,51 @@ def render_salesperson():
 
 
 def _render_contract_expander(c: dict):
-    color = _status_color(c["状态"])
-    header = (
-        f"{c['合同编号']}　·　{c['状态']}　·　"
-        f"发货 {_fmt_money(c['发货额'])}　/　回款 {_fmt_money(c['回款额'])}　"
-        f"/　未回款 {_fmt_money(c['未回款额'])}　·　"
-        f"利润提成 {_fmt_money(c.get('利润提成', 0))}　/　"
-        f"时效提成 {_fmt_money(c.get('时效提成', 0))}"
-    )
-    with st.expander(header, expanded=False):
-        st.markdown(
-            f"**状态：** <span style='color:{color};font-weight:600'>{c['状态']}</span>",
-            unsafe_allow_html=True,
-        )
-        if c["订货单位"]:
-            st.caption("订货单位：" + "　/　".join(c["订货单位"]))
-        if c["开票单位"]:
-            st.caption("开票单位：" + "　/　".join(c["开票单位"]))
+    inv_units = list(c.get("开票单位") or [])
+    ord_units = list(c.get("订货单位") or [])
+    inv_short = truncate_units_text(" / ".join(inv_units), max_n=1, max_chars=22)
 
-        m1, m2, m3, m4 = st.columns(4, gap="medium")
-        with m1:
-            st.metric("发货额", _fmt_money(c["发货额"]))
-        with m2:
-            st.metric("回款额", _fmt_money(c["回款额"]))
-        with m3:
-            st.metric(
-                "利润提成",
-                _fmt_money(c.get("利润提成", 0)),
-                help=(
-                    f"利润提成率：{c.get('利润提成率', '')}　·　"
-                    f"分类：{c.get('利润分类', '')}"
-                ) if c.get("利润提成率") else None,
-            )
-        with m4:
-            st.metric("回款时效提成", _fmt_money(c.get("时效提成", 0)))
+    header_segs = [str(c["合同编号"])]
+    if inv_short:
+        header_segs.append(inv_short)
+    header_segs.append(f"回款 {_fmt_money(c['回款额'])}")
+    if c.get("时效提成", 0):
+        header_segs.append(f"时效提成 {_fmt_money(c.get('时效提成', 0))}")
+    if c.get("利润提成", 0):
+        header_segs.append(f"利润提成 {_fmt_money(c.get('利润提成', 0))}")
+    header = "　·　".join(header_segs)
+
+    with st.expander(header, expanded=False):
+        st.html(
+            f'<div style="display:flex;flex-wrap:wrap;gap:.4rem;'
+            f'align-items:center;margin:.1rem 0 .35rem;">'
+            f'{status_badge(c["状态"])}</div>'
+        )
+
+        st.html(meta_row([
+            ("合同编号", str(c["合同编号"])),
+            ("利润提成率", str(c.get("利润提成率") or "")),
+            ("利润分类", str(c.get("利润分类") or "")),
+        ]))
+
+        if ord_units:
+            st.html(section_title(f"订货单位（{len(ord_units)}）"))
+            st.html(unit_pills(ord_units))
+        if inv_units:
+            st.html(section_title(f"开票单位（{len(inv_units)}）"))
+            st.html(unit_pills(inv_units))
+
+        st.html(kpi_row([
+            ("发货额", _fmt_money(c["发货额"]), False),
+            ("回款额", _fmt_money(c["回款额"]), False),
+            ("未回款额", _fmt_money(c["未回款额"]), False),
+            ("利润提成", _fmt_money(c.get("利润提成", 0)), True),
+            ("时效提成", _fmt_money(c.get("时效提成", 0)), True),
+        ]))
 
         col_d, col_p = st.columns(2, gap="large")
         with col_d:
-            st.markdown("**发货明细**")
+            st.html(section_title("发货明细"))
             if c["发货明细"].empty:
                 st.caption("（无发货记录）")
             else:
@@ -184,7 +185,7 @@ def _render_contract_expander(c: dict):
                     },
                 )
         with col_p:
-            st.markdown("**回款明细**")
+            st.html(section_title("回款明细"))
             if c["回款明细"].empty:
                 st.caption("（无回款记录）")
             else:
@@ -199,7 +200,7 @@ def _render_contract_expander(c: dict):
 
         tl_df = c.get("时效提成明细")
         if tl_df is not None and not tl_df.empty:
-            st.markdown("**时效提成明细**")
+            st.html(section_title("时效提成明细"))
             st.dataframe(
                 format_date_columns(tl_df),
                 width="stretch",
@@ -215,24 +216,20 @@ def _render_contract_expander(c: dict):
 
 def _render_other_section(other: dict):
     """其他（无合同号）：按订货/开票单位再分组。"""
-    color = _status_color(other["状态"])
     with st.container(border=True):
-        st.markdown(
-            f"### 其他（无合同号）　"
-            f"<span style='color:{color};font-weight:600'>{other['状态']}</span>",
-            unsafe_allow_html=True,
+        st.html(
+            '<div style="display:flex;flex-wrap:wrap;align-items:center;gap:.6rem;'
+            'margin:.1rem 0 .35rem;">'
+            '<div style="font-size:1.05rem;font-weight:600;color:#0F172A;">其他（无合同号）</div>'
+            f'{status_badge(other["状态"])}</div>'
         )
-        c1, c2, c3, c4, c5 = st.columns(5, gap="medium")
-        with c1:
-            st.metric("发货额", _fmt_money(other["发货额"]))
-        with c2:
-            st.metric("回款额", _fmt_money(other["回款额"]))
-        with c3:
-            st.metric("未回款额", _fmt_money(other["未回款额"]))
-        with c4:
-            st.metric("利润提成", _fmt_money(other.get("利润提成", 0)))
-        with c5:
-            st.metric("时效提成", _fmt_money(other.get("时效提成", 0)))
+        st.html(kpi_row([
+            ("发货额", _fmt_money(other["发货额"]), False),
+            ("回款额", _fmt_money(other["回款额"]), False),
+            ("未回款额", _fmt_money(other["未回款额"]), False),
+            ("利润提成", _fmt_money(other.get("利润提成", 0)), True),
+            ("时效提成", _fmt_money(other.get("时效提成", 0)), True),
+        ]))
 
         tl_df = other.get("时效提成明细")
         if tl_df is not None and not tl_df.empty:
@@ -296,7 +293,7 @@ def _render_other_section(other: dict):
 def _render_unit_tables(d_sub: pd.DataFrame, p_sub: pd.DataFrame, label: str):
     col_d, col_p = st.columns(2, gap="large")
     with col_d:
-        st.markdown("**发货明细**")
+        st.html(section_title("发货明细"))
         if d_sub is None or d_sub.empty:
             st.caption("（无发货记录）")
         else:
@@ -310,7 +307,7 @@ def _render_unit_tables(d_sub: pd.DataFrame, p_sub: pd.DataFrame, label: str):
                 key=f"other_del_{label}",
             )
     with col_p:
-        st.markdown("**回款明细**")
+        st.html(section_title("回款明细"))
         if p_sub is None or p_sub.empty:
             st.caption("（无回款记录）")
         else:

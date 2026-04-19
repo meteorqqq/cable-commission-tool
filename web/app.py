@@ -380,6 +380,86 @@ div[data-testid="stMetric"] [data-testid="stMetricDelta"] {
     font-variant-numeric: tabular-nums;
 }
 
+/* ───────── Status / Chip / KPI ───────── */
+.rc-badge {
+    display: inline-flex; align-items: center; gap: 6px;
+    padding: 3px 10px; border-radius: 999px;
+    font-size: 0.74rem; font-weight: 600;
+    letter-spacing: 0.02em; line-height: 1.4;
+    border: 1px solid transparent;
+    background: #F1F5F9; color: #334155;
+}
+.rc-badge::before {
+    content: ""; width: 6px; height: 6px; border-radius: 50%;
+    background: currentColor; opacity: 0.85;
+}
+.rc-badge.is-done    { background:#DCFCE7; color:#15803D; }
+.rc-badge.is-partial { background:#FEF3C7; color:#B45309; }
+.rc-badge.is-unpaid  { background:#FEE2E2; color:#B91C1C; }
+.rc-badge.is-undeliv { background:#E2E8F0; color:#475569; }
+.rc-badge.is-prepaid { background:#DBEAFE; color:#1D4ED8; }
+
+.rc-pill {
+    display: inline-flex; align-items: center;
+    padding: 3px 9px; margin: 2px 4px 2px 0;
+    border-radius: 999px;
+    border: 1px solid var(--color-border);
+    background: #FAFAF9; color: var(--color-ink-soft);
+    font-size: 0.76rem; font-weight: 500;
+    line-height: 1.4; max-width: 320px;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.rc-pills-wrap {
+    display: flex; flex-wrap: wrap; gap: 0;
+    margin: 0.25rem 0 0.6rem;
+}
+
+.rc-kpi-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+    gap: 0.6rem;
+    margin: 0.5rem 0 1rem;
+}
+.rc-kpi {
+    background: var(--color-surface);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-sm);
+    padding: 0.55rem 0.8rem;
+}
+.rc-kpi .lbl {
+    font-size: 0.7rem; color: var(--color-mute);
+    text-transform: uppercase; letter-spacing: 0.06em;
+    font-weight: 600;
+}
+.rc-kpi .val {
+    font-size: 1.05rem; color: var(--color-ink);
+    font-weight: 700; font-variant-numeric: tabular-nums;
+    margin-top: 2px;
+}
+.rc-kpi.is-accent .val { color: var(--color-accent-700); }
+
+.rc-meta {
+    display: flex; flex-wrap: wrap; gap: 0.4rem;
+    margin: 0.15rem 0 0.5rem;
+}
+.rc-meta .k {
+    color: var(--color-mute); font-size: 0.78rem; margin-right: 4px;
+}
+.rc-meta .v {
+    color: var(--color-ink-soft); font-size: 0.82rem; font-weight: 500;
+}
+.rc-section-title {
+    font-size: 0.82rem; color: var(--color-mute);
+    font-weight: 600; letter-spacing: 0.06em;
+    text-transform: uppercase;
+    margin: 0.6rem 0 0.3rem;
+}
+
+/* expander 标题里的金额数字稍大、用 tabular-nums 对齐 */
+.main [data-testid="stExpander"] summary {
+    font-variant-numeric: tabular-nums;
+}
+
 /* ───────── Reduced motion ───────── */
 @media (prefers-reduced-motion: reduce) {
     * { transition: none !important; animation: none !important; }

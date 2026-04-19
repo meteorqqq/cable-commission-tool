@@ -85,13 +85,16 @@ def render_quota(username: str):
             defaults = _calc_dept_totals()
             del_totals = _calc_dept_delivery_totals()
 
+            saved_targets = load_rules(username, "dept_targets") or {}
+
             if not depts:
                 st.info("未检测到部门信息")
+                edited_dept = pd.DataFrame(columns=["部门", "部门发货额(万元)", "目标额(万元)"])
             else:
                 dept_data = [{
                     "部门": d,
                     "部门发货额(万元)": del_totals.get(d, 0.0),
-                    "目标额(万元)": defaults.get(d, 0.0),
+                    "目标额(万元)": float(saved_targets.get(d, defaults.get(d, 0.0))),
                 } for d in depts]
                 dept_df = pd.DataFrame(dept_data)
                 edited_dept = st.data_editor(
@@ -109,6 +112,15 @@ def render_quota(username: str):
                         ),
                     },
                 )
+
+                if st.button("保存目标额", key="save_dept_targets"):
+                    targets_to_save = {
+                        str(row["部门"]): float(row["目标额(万元)"])
+                        for _, row in edited_dept.iterrows()
+                        if pd.notna(row.get("目标额(万元)"))
+                    }
+                    save_rules(username, "dept_targets", targets_to_save)
+                    st.success("目标额已保存")
 
     st.markdown("")
     if st.button("计算完成额度提成", type="primary", use_container_width=True):

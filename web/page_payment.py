@@ -3,25 +3,18 @@
 import streamlit as st
 import pandas as pd
 
-from engine.calculator import calc_payment_timeliness, DEFAULT_PAYMENT_TIERS, format_date_columns
+from engine.calculator import (
+    calc_payment_timeliness, DEFAULT_PAYMENT_TIERS, format_date_columns,
+    invoice_units_by_contract, invoice_units_by_contract_sp,
+)
 from db.database import save_rules, load_rules
+from web._ui import (
+    fmt_money, split_units, truncate_units_text,
+    status_badge, unit_pills, kpi_row, meta_row, section_title,
+)
 
 
-def _fmt_money(v: float) -> str:
-    try:
-        return f"{float(v):,.2f}"
-    except Exception:
-        return str(v)
-
-
-def _status_color(status: str) -> str:
-    return {
-        "已完成": "#16a34a",
-        "部分回款": "#f59e0b",
-        "未回款": "#ef4444",
-        "未发货": "#64748b",
-        "未发货（已收款）": "#0ea5e9",
-    }.get(status, "#64748b")
+_fmt_money = fmt_money
 
 
 def _status_of(d_amt: float, p_amt: float) -> str:
@@ -71,12 +64,16 @@ def _build_contract_summary(
             if sp and dept:
                 dept_map.setdefault(sp, dept)
 
+    inv_sp_map = invoice_units_by_contract_sp(delivery_df, payment_df)
+    inv_map = invoice_units_by_contract(delivery_df, payment_df)
+
     out = []
     for (pid, sp), v in rows.items():
         d_amt = round(v.get("发货额", 0.0), 2)
         p_amt = round(v.get("回款额", 0.0), 2)
         out.append({
             "合同编号": pid,
+            "开票单位": inv_sp_map.get((pid, sp)) or inv_map.get(pid, ""),
             "销售员": sp,
             "销售部门": dept_map.get(sp, ""),
             "发货额": d_amt,
@@ -161,11 +158,19 @@ def render_payment(username: str):
     st.markdown("")
     with st.container(border=True):
         st.subheader("合同汇总")
+        view_df = summary_df.copy()
+        if "开票单位" in view_df.columns:
+            view_df["开票单位"] = view_df["开票单位"].apply(
+                lambda s: truncate_units_text(s, max_n=2, max_chars=18)
+            )
         st.dataframe(
-            summary_df,
+            view_df,
             width="stretch",
-            height=min(400, 45 + len(summary_df) * 36),
+            height=min(400, 45 + len(view_df) * 36),
             column_config={
+                "开票单位": st.column_config.TextColumn(
+                    "开票单位", help="多家时仅显示前几家，完整列表见下方明细。"
+                ),
                 "发货额": st.column_config.NumberColumn(format="%.2f"),
                 "回款额": st.column_config.NumberColumn(format="%.2f"),
                 "未回款额": st.column_config.NumberColumn(format="%.2f"),
@@ -188,7 +193,7 @@ def render_payment(username: str):
     )
 
     del_cols_pref = ["发货日期", "发货金额", "订货单位", "开票单位"]
-    pay_cols_pref = ["回款日期", "回款金额", "开票单位", "订货单位"]
+    pay_cols_pref = ["回款日期", "回款金额", "核销金额", "开票单位", "订货单位"]
     tl_cols_pref = ["回款日期", "回款金额", "匹配发货日期", "回款周期(天)",
                     "时效提成比例", "时效提成金额"]
 
@@ -198,21 +203,48 @@ def render_payment(username: str):
 
         pid = row["合同编号"]
         sp = row["销售员"]
-        color = _status_color(row["状态"])
+        inv = row.get("开票单位", "")
+        units = split_units(inv)
+        inv_short = truncate_units_text(inv)
 
-        header = (
-            f"{pid}　·　{sp}　·　"
-            f"发货 {_fmt_money(row['发货额'])}　"
-            f"/　回款 {_fmt_money(row['回款额'])}　"
-            f"/　时效提成 {_fmt_money(row['时效提成合计'])}"
-        )
+        d_amt = float(row["发货额"])
+        p_amt = float(row["回款额"])
+        tl_amt = float(row["时效提成合计"])
+        unpaid = max(d_amt - p_amt, 0.0)
+
+        # 简洁标题：合同号 · 销售员 · 截断的客户 · 回款/时效
+        title_segs = [str(pid), str(sp)]
+        if inv_short:
+            title_segs.append(inv_short)
+        title_segs.append(f"回款 {_fmt_money(p_amt)}")
+        if tl_amt:
+            title_segs.append(f"时效提成 {_fmt_money(tl_amt)}")
+        header = "　·　".join(title_segs)
+
         with st.expander(header, expanded=False):
-            st.markdown(
-                f"**状态：** <span style='color:{color};font-weight:600'>{row['状态']}</span>　",
-                unsafe_allow_html=True,
+            badge_html = (
+                f'<div style="display:flex;flex-wrap:wrap;gap:.4rem;align-items:center;'
+                f'margin:.1rem 0 .35rem;">{status_badge(row["状态"])}</div>'
             )
+            st.html(badge_html)
+
+            metas: list[tuple[str, str]] = []
             if row["销售部门"]:
-                st.caption("销售部门：" + row["销售部门"])
+                metas.append(("销售部门", row["销售部门"]))
+            metas.append(("销售员", str(sp)))
+            metas.append(("合同编号", str(pid)))
+            st.html(meta_row(metas))
+
+            if units:
+                st.html(section_title(f"开票单位（{len(units)}）"))
+                st.html(unit_pills(units))
+
+            st.html(kpi_row([
+                ("发货额", _fmt_money(d_amt), False),
+                ("回款额", _fmt_money(p_amt), False),
+                ("未回款额", _fmt_money(unpaid), False),
+                ("时效提成", _fmt_money(tl_amt), True),
+            ]))
 
             d_sub = delivery_df[
                 (delivery_df["合同编号"].astype(str) == pid)
@@ -229,7 +261,7 @@ def render_payment(username: str):
 
             col_d, col_p = st.columns(2, gap="large")
             with col_d:
-                st.markdown("**发货明细**")
+                st.html(section_title("发货明细"))
                 if d_sub.empty:
                     st.caption("（无发货记录）")
                 else:
@@ -244,7 +276,7 @@ def render_payment(username: str):
                         },
                     )
             with col_p:
-                st.markdown("**回款明细**")
+                st.html(section_title("回款明细"))
                 if p_sub.empty:
                     st.caption("（无回款记录）")
                 else:
@@ -259,7 +291,7 @@ def render_payment(username: str):
                         },
                     )
 
-            st.markdown("**时效匹配明细**")
+            st.html(section_title("时效匹配明细"))
             if tl_sub.empty:
                 st.caption("（无时效记录）")
             else:
