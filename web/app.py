@@ -84,6 +84,28 @@ iframe[title*="streamlit"]                 { display: none !important; }
 [class*="ProfileContainer"],
 [data-testid="stAppViewBlockContainer"] > div > div > a[href*="github.com"]:first-child { display: none !important; }
 
+/* 右下角 "Manage app" 浮动按钮（多版本兼容） */
+[data-testid="manage-app-button"],
+[data-testid="stAppDeployButton"],
+[data-testid="stAppViewBadge"],
+[data-testid="stViewerBadge"],
+[class*="manageAppButton"],
+[class*="ManageApp"],
+[class*="manage-app"],
+button[title*="Manage" i],
+button[aria-label*="Manage" i],
+a[href*="share.streamlit.io"],
+a[href*="streamlit.io/cloud"],
+a[href*="streamlit.io"]                       { display: none !important; }
+/* Cloud Viewer 注入的 iframe / 浮动条 */
+iframe[src*="share.streamlit.io"],
+iframe[src*="streamlitapp.com"] { display: none !important; }
+/* 兜底：任何固定到右下角且 z-index 高的浮动小窗 */
+.stApp > div:last-child > div[style*="position: fixed"][style*="bottom"][style*="right"],
+body > div[style*="position: fixed"][style*="bottom"][style*="right"] {
+    display: none !important;
+}
+
 .block-container {
     padding: 2rem 2.5rem 3rem;
     max-width: 1480px;
@@ -374,6 +396,54 @@ if hasattr(st, "html"):
     st.html(GLOBAL_CSS)
 else:
     st.markdown(GLOBAL_CSS, unsafe_allow_html=True)
+
+import streamlit.components.v1 as _components
+
+_HIDE_BADGES_JS = """
+<script>
+(function(){
+  const doc = (window.parent && window.parent.document) || document;
+  const SELECTORS = [
+    '[data-testid="manage-app-button"]',
+    '[data-testid="stAppDeployButton"]',
+    '[data-testid="stAppViewBadge"]',
+    '[data-testid="stViewerBadge"]',
+    '[class*="viewerBadge"]',
+    '[class*="manageAppButton"]',
+    '[class*="ManageApp"]',
+    '[class*="manage-app"]',
+    'a[href*="share.streamlit.io"]',
+    'a[href*="streamlit.io/cloud"]',
+    'a[href*="streamlit.io"]',
+    'iframe[src*="share.streamlit.io"]',
+    'iframe[src*="streamlitapp.com"]'
+  ];
+  function purge(){
+    try {
+      SELECTORS.forEach(sel => {
+        doc.querySelectorAll(sel).forEach(el => el.remove());
+      });
+      // 兜底：右下角固定定位的浮动元素
+      doc.querySelectorAll('div, a, button').forEach(el => {
+        const cs = doc.defaultView.getComputedStyle(el);
+        if (cs && cs.position === 'fixed' && parseInt(cs.bottom) < 60 && parseInt(cs.right) < 60) {
+          const rect = el.getBoundingClientRect();
+          if (rect.width < 200 && rect.height < 80) {
+            el.style.setProperty('display','none','important');
+          }
+        }
+      });
+    } catch(e){}
+  }
+  purge();
+  setInterval(purge, 1000);
+  if (doc.body) {
+    new MutationObserver(purge).observe(doc.body, {childList:true, subtree:true});
+  }
+})();
+</script>
+"""
+_components.html(_HIDE_BADGES_JS, height=0, width=0)
 
 NAV_ITEMS = [
     "数据导入",
