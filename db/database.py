@@ -17,6 +17,7 @@ from datetime import datetime
 
 import pandas as pd
 from sqlalchemy import create_engine
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import sessionmaker, Session
 
 from db.models import (
@@ -146,19 +147,30 @@ def delete_session(session_id: int):
 # ── 规则持久化 ────────────────────────────────────────────
 
 def save_rules(username: str, rule_type: str, rule_data: object):
+    data_json = json.dumps(rule_data, ensure_ascii=False)
     sess = get_session()
     try:
         existing = sess.query(SavedRule).filter_by(
             username=username, rule_type=rule_type).first()
-        data_json = json.dumps(rule_data, ensure_ascii=False)
         if existing:
             existing.rule_data_json = data_json
             existing.updated_at = datetime.now()
-        else:
-            sess.add(SavedRule(
-                username=username, rule_type=rule_type,
-                rule_data_json=data_json))
-        sess.commit()
+            sess.commit()
+            return
+        sess.add(SavedRule(
+            username=username, rule_type=rule_type,
+            rule_data_json=data_json))
+        try:
+            sess.commit()
+        except IntegrityError:
+            sess.rollback()
+            existing = sess.query(SavedRule).filter_by(
+                username=username, rule_type=rule_type).first()
+            if existing is None:
+                raise
+            existing.rule_data_json = data_json
+            existing.updated_at = datetime.now()
+            sess.commit()
     finally:
         sess.close()
 
@@ -219,18 +231,46 @@ def save_import_snapshots(
     delivery_df: pd.DataFrame | None = None,
     payment_df: pd.DataFrame | None = None,
 ):
-    """持久化交货/回款 Excel 解析后的全量明细；仅更新传入的非空表。"""
+    """持久化交货/回款 Excel 解析后的全量明细；仅更新传入的非空表。
+
+    使用 "尝试 INSERT，撞 unique 约束就改 UPDATE" 的双保险，
+    避免 Streamlit 反复重跑脚本时多个会话并行触发 UniqueViolation。
+    """
+    new_delivery = (
+        _dataframe_to_records_json(delivery_df)
+        if delivery_df is not None and not delivery_df.empty
+        else None
+    )
+    new_payment = (
+        _dataframe_to_records_json(payment_df)
+        if payment_df is not None and not payment_df.empty
+        else None
+    )
+
     sess = get_session()
     try:
         row = sess.query(ImportedSnapshot).filter_by(username=username).first()
         if row is None:
-            row = ImportedSnapshot(username=username)
+            row = ImportedSnapshot(
+                username=username,
+                delivery_json=new_delivery,
+                payment_json=new_payment,
+            )
             sess.add(row)
-            sess.flush()
-        if delivery_df is not None and not delivery_df.empty:
-            row.delivery_json = _dataframe_to_records_json(delivery_df)
-        if payment_df is not None and not payment_df.empty:
-            row.payment_json = _dataframe_to_records_json(payment_df)
+            try:
+                sess.commit()
+                return
+            except IntegrityError:
+                sess.rollback()
+                row = sess.query(ImportedSnapshot).filter_by(
+                    username=username).first()
+                if row is None:
+                    raise
+
+        if new_delivery is not None:
+            row.delivery_json = new_delivery
+        if new_payment is not None:
+            row.payment_json = new_payment
         row.updated_at = datetime.now()
         sess.commit()
     finally:
