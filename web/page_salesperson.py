@@ -263,6 +263,7 @@ def _render_other_section(other: dict):
             _render_unit_tables(d_df, p_df, label="全部")
             return
 
+        st.html(section_title(f"按客户拆分（{len(units)} 家）"))
         for unit in units:
             d_sub = d_df.copy()
             if not d_sub.empty:
@@ -282,11 +283,33 @@ def _render_other_section(other: dict):
 
             d_amt = float(d_sub["发货金额"].sum()) if "发货金额" in d_sub.columns else 0.0
             p_amt = float(p_sub["回款金额"].sum()) if "回款金额" in p_sub.columns else 0.0
-
-            header = (
-                f"{unit}　·　发货 {_fmt_money(d_amt)}　/　回款 {_fmt_money(p_amt)}"
+            unpaid = max(d_amt - p_amt, 0.0)
+            sub_status = (
+                "已完成" if p_amt + 1e-2 >= d_amt and d_amt > 0
+                else "部分回款" if d_amt > 0 and p_amt > 0
+                else "未回款" if d_amt > 0
+                else "未发货（已收款）" if p_amt > 0
+                else "未发货"
             )
+
+            unit_short = unit if len(unit) <= 28 else unit[:28] + "…"
+            header_segs = [unit_short, f"回款 {_fmt_money(p_amt)}"]
+            if d_amt:
+                header_segs.insert(1, f"发货 {_fmt_money(d_amt)}")
+            header = "　·　".join(header_segs)
+
             with st.expander(header, expanded=False):
+                st.html(
+                    f'<div style="display:flex;flex-wrap:wrap;gap:.4rem;'
+                    f'align-items:center;margin:.1rem 0 .35rem;">'
+                    f'{status_badge(sub_status)}</div>'
+                )
+                st.html(meta_row([("客户", unit)]))
+                st.html(kpi_row([
+                    ("发货额", _fmt_money(d_amt), False),
+                    ("回款额", _fmt_money(p_amt), False),
+                    ("未回款额", _fmt_money(unpaid), False),
+                ]))
                 _render_unit_tables(d_sub, p_sub, label=unit)
 
 

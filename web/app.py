@@ -400,14 +400,16 @@ div[data-testid="stMetric"] [data-testid="stMetricDelta"] {
 .rc-badge.is-prepaid { background:#DBEAFE; color:#1D4ED8; }
 
 .rc-pill {
-    display: inline-flex; align-items: center;
-    padding: 3px 9px; margin: 2px 4px 2px 0;
-    border-radius: 999px;
+    display: inline-block;
+    padding: 3px 10px; margin: 2px 4px 2px 0;
+    border-radius: 12px;
     border: 1px solid var(--color-border);
     background: #FAFAF9; color: var(--color-ink-soft);
     font-size: 0.76rem; font-weight: 500;
-    line-height: 1.4; max-width: 320px;
-    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    line-height: 1.5;
+    max-width: 100%;
+    white-space: normal; word-break: break-all;
+    overflow-wrap: anywhere;
 }
 .rc-pills-wrap {
     display: flex; flex-wrap: wrap; gap: 0;
@@ -563,11 +565,14 @@ def main():
     if "payment_df" not in st.session_state:
         st.session_state.payment_df = None
 
-    snap_dd, snap_pd = load_import_snapshots(username)
-    if st.session_state.delivery_df is None and snap_dd is not None:
-        st.session_state.delivery_df = snap_dd
-    if st.session_state.payment_df is None and snap_pd is not None:
-        st.session_state.payment_df = snap_pd
+    # 仅在首次登录后加载一次远端快照，之后整个 session 都直接用 session_state
+    if not st.session_state.get("_snapshot_loaded_for") == username:
+        snap_dd, snap_pd = load_import_snapshots(username)
+        if st.session_state.delivery_df is None and snap_dd is not None:
+            st.session_state.delivery_df = snap_dd
+        if st.session_state.payment_df is None and snap_pd is not None:
+            st.session_state.payment_df = snap_pd
+        st.session_state["_snapshot_loaded_for"] = username
 
     page_map = {
         "数据导入": lambda: render_import(username),
