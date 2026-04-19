@@ -1,8 +1,17 @@
-"""数据库连接与操作"""
+"""数据库连接与操作
+
+优先使用环境变量 / Streamlit Secrets 中的 ``DATABASE_URL``（远程 Postgres 等），
+未设置时回落到仓库内的本地 SQLite，保留本地开发体验。
+
+部署到 Streamlit Cloud 时，必须在 App → Settings → Secrets 中配置：
+
+    DATABASE_URL = "postgresql+psycopg2://user:password@host/db?sslmode=require"
+"""
 
 from __future__ import annotations
 import io
 import json
+import os
 from pathlib import Path
 from datetime import datetime
 
@@ -17,9 +26,36 @@ from db.models import (
 DB_PATH = Path(__file__).resolve().parent.parent / "data" / "app.db"
 
 
-def get_engine():
+def _resolve_db_url() -> str:
+    """按优先级解析数据库连接串：环境变量 > st.secrets > 本地 SQLite。"""
+    url = os.environ.get("DATABASE_URL")
+    if url:
+        return _normalize_url(url)
+    try:
+        import streamlit as st  # 延迟导入，避免脚本式调用时强依赖
+        if hasattr(st, "secrets") and "DATABASE_URL" in st.secrets:
+            return _normalize_url(str(st.secrets["DATABASE_URL"]))
+    except Exception:
+        pass
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
-    engine = create_engine(f"sqlite:///{DB_PATH}", echo=False)
+    return f"sqlite:///{DB_PATH}"
+
+
+def _normalize_url(url: str) -> str:
+    """兼容 Neon / Heroku 给的 postgres:// 旧前缀。"""
+    if url.startswith("postgres://"):
+        url = "postgresql+psycopg2://" + url[len("postgres://"):]
+    elif url.startswith("postgresql://") and "+psycopg2" not in url and "+psycopg" not in url:
+        url = "postgresql+psycopg2://" + url[len("postgresql://"):]
+    return url
+
+
+def get_engine():
+    url = _resolve_db_url()
+    engine_kwargs: dict = {"echo": False}
+    if url.startswith("postgresql"):
+        engine_kwargs.update(pool_pre_ping=True, pool_recycle=300)
+    engine = create_engine(url, **engine_kwargs)
     Base.metadata.create_all(engine)
     return engine
 
