@@ -7,11 +7,14 @@ import streamlit as st
 import pandas as pd
 
 from engine.calculator import (
-    calc_profit_commission, ContractPricing, extract_project_list,
+    calc_profit_commission, ContractPricing,
     load_contract_pricing_excel, DEFAULT_PROFIT_BASE_RATE, DEFAULT_PROFIT_K_MAX,
-    invoice_units_by_contract, invoice_units_by_contract_sp,
 )
 from web._ui import truncate_units_text
+from web._cache import (
+    get_invoice_units_by_contract, get_invoice_units_by_contract_sp,
+    get_project_list, bump_calc_version,
+)
 from db.database import (
     save_rules, load_rules, save_contract_prices, load_contract_prices,
 )
@@ -28,16 +31,21 @@ def _profit_result_for_arrow(df: pd.DataFrame) -> pd.DataFrame:
 
 def _build_price_df(username: str) -> pd.DataFrame:
     delivery_df = st.session_state.get("delivery_df")
-    payment_df = st.session_state.get("payment_df")
-    projects = extract_project_list(delivery_df, payment_df)
+    projects = get_project_list()
 
     saved_prices = {p["project_id"]: p for p in load_contract_prices(username)}
-    inv_map = invoice_units_by_contract(delivery_df, payment_df)
+    inv_map = get_invoice_units_by_contract()
 
-    proj_totals = {}
-    if delivery_df is not None and "合同编号" in delivery_df.columns:
-        for pid, grp in delivery_df.groupby("合同编号"):
-            proj_totals[pid] = round(grp["发货金额"].sum(), 2)
+    proj_totals = st.session_state.get("_proj_delivery_totals_cache")
+    cache_key = f"_proj_delivery_totals::v{st.session_state.get('_data_version', 0)}"
+    if cache_key in st.session_state:
+        proj_totals = st.session_state[cache_key]
+    else:
+        proj_totals = {}
+        if delivery_df is not None and "合同编号" in delivery_df.columns:
+            for pid, grp in delivery_df.groupby("合同编号"):
+                proj_totals[pid] = round(grp["发货金额"].sum(), 2)
+        st.session_state[cache_key] = proj_totals
 
     rows = []
     for pid in projects:
@@ -179,6 +187,7 @@ def render_profit(username: str):
                         delivery_df, payment_df, prices,
                         base_rate_pct=base_rate, k_max=k_max)
                     st.session_state["profit_result"] = result
+                    bump_calc_version()
                     st.success(f"计算完成，共 {len(result)} 条记录")
                 except Exception as e:
                     st.error(f"计算出错: {e}")
@@ -191,8 +200,8 @@ def render_profit(username: str):
             and "销售员" in display_df.columns
             and "开票单位" not in display_df.columns
         ):
-            inv_sp_map = invoice_units_by_contract_sp(delivery_df, payment_df)
-            inv_map = invoice_units_by_contract(delivery_df, payment_df)
+            inv_sp_map = get_invoice_units_by_contract_sp()
+            inv_map = get_invoice_units_by_contract()
             keys = list(zip(display_df["合同编号"].astype(str), display_df["销售员"].astype(str)))
             display_df.insert(
                 display_df.columns.get_loc("合同编号") + 1,

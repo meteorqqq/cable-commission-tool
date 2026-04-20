@@ -5,12 +5,11 @@ import io
 import streamlit as st
 import pandas as pd
 
-from engine.calculator import (
-    build_contract_overview,
-    invoice_units_by_contract_sp,
-)
 from db.database import save_calc_session
 from web._ui import fmt_money, truncate_units_text, meta_row, kpi_row
+from web._cache import (
+    get_invoice_units_by_contract_sp, get_contract_overview, session_cache,
+)
 
 
 def _status_of(d_amt: float, p_amt: float) -> str:
@@ -25,6 +24,7 @@ def _status_of(d_amt: float, p_amt: float) -> str:
     return "部分回款"
 
 
+@session_cache("total_summary_df", scope="calc")
 def _build_total_df() -> pd.DataFrame | None:
     quota_df = st.session_state.get("quota_result")
     profit_df = st.session_state.get("profit_result")
@@ -86,6 +86,7 @@ def _build_total_df() -> pd.DataFrame | None:
     return df.sort_values("总提成(元)", ascending=False).reset_index(drop=True)
 
 
+@session_cache("total_contract_breakdown", scope="calc")
 def _build_contract_breakdown_by_salesperson() -> dict[str, pd.DataFrame]:
     """为每位销售员构建"按合同"明细表，合并利润 / 回款时效 / 发货 / 回款 等信息。"""
     delivery_df = st.session_state.get("delivery_df")
@@ -93,7 +94,7 @@ def _build_contract_breakdown_by_salesperson() -> dict[str, pd.DataFrame]:
     profit_df = st.session_state.get("profit_result")
     timeliness_df = st.session_state.get("timeliness_result")
 
-    inv_sp_map = invoice_units_by_contract_sp(delivery_df, payment_df)
+    inv_sp_map = get_invoice_units_by_contract_sp()
 
     # 先构建 (销售员, 合同号) 的基础集合
     rows: dict[tuple[str, str], dict] = {}
@@ -337,10 +338,7 @@ def render_total(username: str):
             if not flat_breakdown.empty:
                 sheets["销售员合同明细"] = flat_breakdown
 
-            ov = build_contract_overview(
-                st.session_state.get("delivery_df"),
-                st.session_state.get("payment_df"),
-            )
+            ov = get_contract_overview()
             if ov is not None and not ov.empty:
                 sheets["合同编号汇总"] = ov
             for key, state_key in [
@@ -380,10 +378,7 @@ def render_total(username: str):
                 if not flat_breakdown.empty:
                     results["销售员合同明细"] = flat_breakdown
 
-                ov = build_contract_overview(
-                    st.session_state.get("delivery_df"),
-                    st.session_state.get("payment_df"),
-                )
+                ov = get_contract_overview()
                 if ov is not None and not ov.empty:
                     results["合同编号汇总"] = ov
                 for key, state_key in [

@@ -9,11 +9,10 @@ import pandas as pd
 from engine.calculator import (
     load_delivery_excel,
     load_payment_excel,
-    build_contract_overview,
-    extract_project_list,
     format_date_columns,
 )
 from db.database import save_import_snapshots
+from web._cache import bump_data_version, get_project_list, get_contract_overview
 
 
 def _upload_and_load(
@@ -36,6 +35,7 @@ def _upload_and_load(
                 save_import_snapshots(username, delivery_df=df)
             else:
                 save_import_snapshots(username, payment_df=df)
+            bump_data_version()
             st.success(f"已加载 {len(df)} 条记录，并已写入数据库")
         except Exception as e:
             st.error(f"加载失败: {e}")
@@ -86,12 +86,12 @@ def render_import(username: str):
     dd = st.session_state.get("delivery_df")
     pd_df = st.session_state.get("payment_df")
     with c3:
-        n_union = len(extract_project_list(dd, pd_df))
+        n_union = len(get_project_list())
         st.metric("合同编号（去重）", f"{n_union} 个")
 
     if dd is not None or pd_df is not None:
-        overview = build_contract_overview(dd, pd_df)
-        if not overview.empty:
+        overview = get_contract_overview()
+        if overview is not None and not overview.empty:
             st.markdown("")
             with st.container(border=True):
                 st.subheader("合同编号汇总")

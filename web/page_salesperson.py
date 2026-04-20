@@ -8,6 +8,37 @@ from web._ui import (
     fmt_money, truncate_units_text,
     status_badge, unit_pills, kpi_row, meta_row, section_title,
 )
+from web._cache import calc_version, session_cache
+
+
+@session_cache("salesperson_names", scope="data")
+def _cached_salesperson_names() -> list[str]:
+    return list_salespersons(
+        st.session_state.get("delivery_df"),
+        st.session_state.get("payment_df"),
+    )
+
+
+def _cached_salesperson_detail(sel: str) -> dict:
+    """按 (calc_version, sel) 缓存单位销售员的 detail，避免切页回来重算。"""
+    v = calc_version()
+    key = f"_memo::salesperson_detail::v{v}::{sel}"
+    if key in st.session_state:
+        return st.session_state[key]
+    # 清理旧版本
+    prefix = "_memo::salesperson_detail::"
+    for k in list(st.session_state.keys()):
+        if isinstance(k, str) and k.startswith(prefix) and not k.startswith(f"{prefix}v{v}::"):
+            del st.session_state[k]
+    detail = build_salesperson_detail(
+        sel,
+        st.session_state.get("delivery_df"),
+        st.session_state.get("payment_df"),
+        profit_df=st.session_state.get("profit_result"),
+        timeliness_df=st.session_state.get("timeliness_result"),
+    )
+    st.session_state[key] = detail
+    return detail
 
 
 _fmt_money = fmt_money
@@ -22,7 +53,7 @@ def render_salesperson():
         st.warning("请先在数据导入页上传交货或回款数据")
         return
 
-    names = list_salespersons(delivery_df, payment_df)
+    names = _cached_salesperson_names()
     if not names:
         st.info("未检测到销售员信息")
         return
@@ -37,10 +68,7 @@ def render_salesperson():
     profit_df = st.session_state.get("profit_result")
     timeliness_df = st.session_state.get("timeliness_result")
 
-    detail = build_salesperson_detail(
-        sel, delivery_df, payment_df,
-        profit_df=profit_df, timeliness_df=timeliness_df,
-    )
+    detail = _cached_salesperson_detail(sel)
 
     if profit_df is None or timeliness_df is None:
         missing = []

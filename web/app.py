@@ -19,6 +19,7 @@ from web.page_total import render_total
 from web.page_history import render_history
 from web.page_salesperson import render_salesperson
 from db.database import load_import_snapshots
+from web._cache import bump_data_version
 
 st.set_page_config(
     page_title="锐洋集团提成计算工具",
@@ -534,22 +535,24 @@ def load_auth_config():
         return yaml.safe_load(f)
 
 
-def main():
-    config = load_auth_config()
-
-    authenticator = stauth.Authenticate(
-        config["credentials"],
-        config["cookie"]["name"],
-        config["cookie"]["key"],
-        config["cookie"]["expiry_days"],
+def _render_login(authenticator) -> None:
+    """未登录时渲染的品牌头 + 登录表单。"""
+    login_brand = (
+        '<div style="max-width:400px;margin:5rem auto 0;text-align:center;">'
+        '<div style="display:inline-flex;align-items:center;gap:.55rem;'
+        'padding:.35rem .75rem;border:1px solid #E5E7EB;border-radius:999px;'
+        'font-size:.74rem;font-weight:600;letter-spacing:.06em;color:#475569;'
+        'background:#FAFAF9;"><span style="width:6px;height:6px;'
+        'border-radius:2px;background:#D4AF37;"></span>锐洋集团 · 销售提成审核系统</div>'
+        '<h2 style="margin:1rem 0 .25rem;font-size:1.6rem;font-weight:700;'
+        'letter-spacing:-.01em;color:#0F172A;">锐洋集团提成计算工具</h2>'
+        '<p style="margin:0;color:#94A3B8;font-size:.88rem;">请使用授权账户登录以继续</p>'
+        '</div>'
     )
-
-    if st.session_state.get("authentication_status") is not True:
-        login_brand = """<div style="max-width:400px;margin:5rem auto 0;text-align:center;"><div style="display:inline-flex;align-items:center;gap:.55rem;padding:.35rem .75rem;border:1px solid #E5E7EB;border-radius:999px;font-size:.74rem;font-weight:600;letter-spacing:.06em;color:#475569;background:#FAFAF9;"><span style="width:6px;height:6px;border-radius:2px;background:#D4AF37;"></span>锐洋集团 · 销售提成审核系统</div><h2 style="margin:1rem 0 .25rem;font-size:1.6rem;font-weight:700;letter-spacing:-.01em;color:#0F172A;">锐洋集团提成计算工具</h2><p style="margin:0;color:#94A3B8;font-size:.88rem;">请使用授权账户登录以继续</p></div>"""
-        if hasattr(st, "html"):
-            st.html(login_brand)
-        else:
-            st.markdown(login_brand, unsafe_allow_html=True)
+    if hasattr(st, "html"):
+        st.html(login_brand)
+    else:
+        st.markdown(login_brand, unsafe_allow_html=True)
 
     authenticator.login(
         location="main",
@@ -562,11 +565,28 @@ def main():
         },
     )
 
-    if st.session_state.get("authentication_status") is None:
-        return
 
-    if st.session_state.get("authentication_status") is False:
-        st.error("用户名或密码错误")
+def main():
+    config = load_auth_config()
+
+    authenticator = stauth.Authenticate(
+        config["credentials"],
+        config["cookie"]["name"],
+        config["cookie"]["key"],
+        config["cookie"]["expiry_days"],
+    )
+
+    # ── 登录分支：已登录与未登录严格互斥，避免登录残留 DOM ──
+    auth_status = st.session_state.get("authentication_status")
+
+    if auth_status is not True:
+        _render_login(authenticator)
+        new_status = st.session_state.get("authentication_status")
+        if new_status is True:
+            # 登录刚刚成功：强制一次 rerun，让整个 DOM 从头渲染主界面
+            st.rerun()
+        if new_status is False:
+            st.error("用户名或密码错误")
         return
 
     username = st.session_state.get("username", "")
@@ -634,13 +654,18 @@ def main():
         st.session_state.payment_df = None
 
     # 仅在首次登录后加载一次远端快照，之后整个 session 都直接用 session_state
-    if not st.session_state.get("_snapshot_loaded_for") == username:
+    if st.session_state.get("_snapshot_loaded_for") != username:
         snap_dd, snap_pd = load_import_snapshots(username)
+        changed = False
         if st.session_state.delivery_df is None and snap_dd is not None:
             st.session_state.delivery_df = snap_dd
+            changed = True
         if st.session_state.payment_df is None and snap_pd is not None:
             st.session_state.payment_df = snap_pd
+            changed = True
         st.session_state["_snapshot_loaded_for"] = username
+        if changed:
+            bump_data_version()
 
     page_map = {
         "数据导入": lambda: render_import(username),

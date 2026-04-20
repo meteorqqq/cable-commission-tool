@@ -5,12 +5,15 @@ import pandas as pd
 
 from engine.calculator import (
     calc_payment_timeliness, DEFAULT_PAYMENT_TIERS, format_date_columns,
-    invoice_units_by_contract, invoice_units_by_contract_sp,
 )
 from db.database import save_rules, load_rules
 from web._ui import (
     fmt_money, split_units, truncate_units_text,
     status_badge, unit_pills, kpi_row, meta_row, section_title,
+)
+from web._cache import (
+    get_invoice_units_by_contract, get_invoice_units_by_contract_sp,
+    bump_calc_version, session_cache,
 )
 
 
@@ -27,6 +30,15 @@ def _status_of(d_amt: float, p_amt: float) -> str:
     if p_amt + 1e-2 >= d_amt:
         return "已完成"
     return "部分回款"
+
+
+@session_cache("payment_contract_summary", scope="calc")
+def _build_contract_summary_cached() -> pd.DataFrame:
+    return _build_contract_summary(
+        st.session_state.get("timeliness_result"),
+        st.session_state.get("delivery_df"),
+        st.session_state.get("payment_df"),
+    )
 
 
 def _build_contract_summary(
@@ -64,8 +76,8 @@ def _build_contract_summary(
             if sp and dept:
                 dept_map.setdefault(sp, dept)
 
-    inv_sp_map = invoice_units_by_contract_sp(delivery_df, payment_df)
-    inv_map = invoice_units_by_contract(delivery_df, payment_df)
+    inv_sp_map = get_invoice_units_by_contract_sp()
+    inv_map = get_invoice_units_by_contract()
 
     out = []
     for (pid, sp), v in rows.items():
@@ -129,6 +141,7 @@ def render_payment(username: str):
             st.session_state["timeliness_result"] = timeliness_df
             st.session_state["del_summary"] = del_summary
             st.session_state["pay_summary"] = pay_summary
+            bump_calc_version()
             st.success(f"计算完成，时效记录 {len(timeliness_df)} 条")
         except Exception as e:
             st.error(f"计算出错: {e}")
@@ -139,7 +152,7 @@ def render_payment(username: str):
 
     st.markdown("")
 
-    summary_df = _build_contract_summary(timeliness_df, delivery_df, payment_df)
+    summary_df = _build_contract_summary_cached()
 
     if summary_df.empty:
         st.info("暂无合同数据")

@@ -8,6 +8,7 @@ from engine.calculator import (
     _build_salesperson_dept_map,
 )
 from db.database import save_rules, load_rules
+from web._cache import bump_calc_version
 
 
 def _get_dept_list() -> list[str]:
@@ -133,6 +134,7 @@ def render_quota(username: str):
         try:
             result = calc_quota_commission_by_dept(delivery_df, payment_df, dept_targets, tiers)
             st.session_state["quota_result"] = result
+            bump_calc_version()
             st.success(f"计算完成，共 {len(result)} 位销售员")
         except Exception as e:
             st.error(f"计算出错: {e}")
