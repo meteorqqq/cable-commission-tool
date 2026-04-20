@@ -29,27 +29,16 @@ def render_history(username: str):
         st.info("暂无历史记录")
         return
 
-    c1, c2 = st.columns([2, 1], gap="medium")
-    with c1:
-        kw = st.text_input(
-            "按会话名称 / 结果类型搜索", value="",
-            placeholder="输入关键字过滤", key="history_search",
-        )
-    with c2:
-        all_types = sorted({t for s in sessions for t in s["result_types"]})
-        type_filter = st.multiselect(
-            "按结果类型筛选", options=all_types, default=[],
-            key="history_type_filter",
-        )
+    kw = st.text_input(
+        "按会话名称 / 结果类型搜索", value="",
+        placeholder="输入关键字过滤", key="history_search",
+    )
 
     def _row_passes(s: dict) -> bool:
         if kw and kw.strip():
             k = kw.strip()
             hit = (k in s["name"]) or any(k in t for t in s["result_types"])
             if not hit:
-                return False
-        if type_filter:
-            if not any(t in type_filter for t in s["result_types"]):
                 return False
         return True
 

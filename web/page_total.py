@@ -326,13 +326,15 @@ def _build_export_template_df(total_df: pd.DataFrame) -> pd.DataFrame:
 
 
 def _collect_export_sheets(total_df: pd.DataFrame) -> dict[str, pd.DataFrame]:
-    """汇总所有用于导出 / 保存历史的 sheet，保证两处口径一致。"""
-    export_df = _build_export_template_df(total_df)
-    sheets: dict[str, pd.DataFrame] = {"总提成汇总": export_df}
+    """汇总所有用于导出 / 保存历史的 sheet，保证两处口径一致。
 
-    flat_breakdown = _build_contract_breakdown_flat(total_df)
-    if not flat_breakdown.empty:
-        sheets["销售员合同明细"] = flat_breakdown
+    「总提成汇总」为界面「销售员提成汇总」表；「销售员合同明细」为原先 Excel
+    第一页（按合同模板、列名固定）的导出结果。
+    """
+    sheets: dict[str, pd.DataFrame] = {
+        "总提成汇总": total_df.copy(),
+        "销售员合同明细": _build_export_template_df(total_df),
+    }
 
     ov = get_contract_overview()
     if ov is not None and not ov.empty:
