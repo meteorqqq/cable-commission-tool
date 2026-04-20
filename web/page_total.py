@@ -6,7 +6,7 @@ import streamlit as st
 import pandas as pd
 
 from db.database import save_calc_session
-from web._ui import fmt_money, truncate_units_text, meta_row, kpi_row
+from web._ui import fmt_money, meta_row, kpi_row
 from web._cache import (
     get_invoice_units_by_contract_sp, get_contract_overview, session_cache,
 )
@@ -296,18 +296,14 @@ def render_total(username: str):
                     if sp_df.empty:
                         st.caption("（未匹配到合同明细，请确认已完成利润/时效提成计算）")
                     else:
-                        view_df = sp_df.copy()
-                        view_df["开票单位"] = view_df["开票单位"].apply(
-                            lambda s: truncate_units_text(s, max_n=2, max_chars=18)
-                        )
                         st.dataframe(
-                            view_df,
+                            sp_df,
                             width="stretch",
-                            height=min(400, 45 + len(view_df) * 36),
+                            height=min(400, 45 + len(sp_df) * 36),
                             column_config={
                                 "开票单位": st.column_config.TextColumn(
                                     "开票单位",
-                                    help="多家时仅显示前几家；完整列表见'销售员详情'页或'回款时效提成'页。",
+                                    help="保留全称；显示区域不足时可点击单元格查看完整文本。",
                                 ),
                                 "合同发货额": st.column_config.NumberColumn(format="%.2f"),
                                 "合同回款额": st.column_config.NumberColumn(format="%.2f"),

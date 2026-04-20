@@ -10,7 +10,6 @@ from engine.calculator import (
     calc_profit_commission, ContractPricing,
     load_contract_pricing_excel, DEFAULT_PROFIT_BASE_RATE, DEFAULT_PROFIT_K_MAX,
 )
-from web._ui import truncate_units_text
 from web._cache import (
     get_invoice_units_by_contract, get_invoice_units_by_contract_sp,
     get_project_list, bump_calc_version,
@@ -238,18 +237,13 @@ def render_profit(username: str):
                 if picked:
                     display_df = display_df[display_df["状态"].isin(picked)]
 
-            view_df = display_df.copy()
-            if "开票单位" in view_df.columns:
-                view_df["开票单位"] = view_df["开票单位"].apply(
-                    lambda s: truncate_units_text(s, max_n=2, max_chars=18)
-                )
             st.dataframe(
-                view_df,
+                display_df,
                 width="stretch",
                 height=420,
                 column_config={
                     "开票单位": st.column_config.TextColumn(
-                        "开票单位", help="多家时仅显示前几家。"
+                        "开票单位", help="保留全称；显示区域不足时可点击单元格查看完整文本。"
                     ),
                     "合同发货额": st.column_config.NumberColumn(format="%.2f"),
                     "合同回款额": st.column_config.NumberColumn(format="%.2f"),

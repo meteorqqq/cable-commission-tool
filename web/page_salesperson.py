@@ -111,7 +111,7 @@ def render_salesperson():
         units_str = " / ".join(c["订货单位"]) if c["订货单位"] else ""
         summary_rows.append({
             "合同编号": c["合同编号"],
-            "订货单位": truncate_units_text(units_str, max_n=2, max_chars=18),
+            "订货单位": units_str,
             "发货额": c["发货额"],
             "回款额": c["回款额"],
             "未回款额": c["未回款额"],
@@ -134,7 +134,7 @@ def render_salesperson():
             height=min(400, 45 + len(summary_df) * 36),
             column_config={
                 "订货单位": st.column_config.TextColumn(
-                    "订货单位", help="多家时仅显示前几家，完整列表见下方明细。"
+                    "订货单位", help="保留全称；显示区域不足时可点击单元格查看完整文本。"
                 ),
                 "发货额": st.column_config.NumberColumn(format="%.2f"),
                 "回款额": st.column_config.NumberColumn(format="%.2f"),

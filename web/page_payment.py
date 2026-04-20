@@ -171,18 +171,13 @@ def render_payment(username: str):
     st.markdown("")
     with st.container(border=True):
         st.subheader("合同汇总")
-        view_df = summary_df.copy()
-        if "开票单位" in view_df.columns:
-            view_df["开票单位"] = view_df["开票单位"].apply(
-                lambda s: truncate_units_text(s, max_n=2, max_chars=18)
-            )
         st.dataframe(
-            view_df,
+            summary_df,
             width="stretch",
-            height=min(400, 45 + len(view_df) * 36),
+            height=min(400, 45 + len(summary_df) * 36),
             column_config={
                 "开票单位": st.column_config.TextColumn(
-                    "开票单位", help="多家时仅显示前几家，完整列表见下方明细。"
+                    "开票单位", help="保留全称；显示区域不足时可点击单元格查看完整文本。"
                 ),
                 "发货额": st.column_config.NumberColumn(format="%.2f"),
                 "回款额": st.column_config.NumberColumn(format="%.2f"),
