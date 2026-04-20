@@ -11,6 +11,7 @@ from web._ui import (
     fmt_money, split_units, truncate_units_text,
     status_badge, unit_pills, kpi_row, meta_row, section_title,
 )
+from web._table import dataframe_with_fulltext_panel
 from web._cache import (
     get_invoice_units_by_contract, get_invoice_units_by_contract_sp,
     bump_calc_version, session_cache,
@@ -171,9 +172,10 @@ def render_payment(username: str):
     st.markdown("")
     with st.container(border=True):
         st.subheader("合同汇总")
-        st.dataframe(
+        dataframe_with_fulltext_panel(
             summary_df,
-            width="stretch",
+            key="payment_summary_selectable",
+            fulltext_cols=["开票单位"],
             height=min(400, 45 + len(summary_df) * 36),
             column_config={
                 "开票单位": st.column_config.TextColumn(

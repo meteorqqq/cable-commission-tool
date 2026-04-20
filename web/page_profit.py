@@ -14,6 +14,7 @@ from web._cache import (
     get_invoice_units_by_contract, get_invoice_units_by_contract_sp,
     get_project_list, bump_calc_version,
 )
+from web._table import dataframe_with_fulltext_panel
 from db.database import (
     save_rules, load_rules, save_contract_prices, load_contract_prices,
 )
@@ -237,9 +238,10 @@ def render_profit(username: str):
                 if picked:
                     display_df = display_df[display_df["状态"].isin(picked)]
 
-            st.dataframe(
+            dataframe_with_fulltext_panel(
                 display_df,
-                width="stretch",
+                key="profit_result_selectable",
+                fulltext_cols=["开票单位"],
                 height=420,
                 column_config={
                     "开票单位": st.column_config.TextColumn(

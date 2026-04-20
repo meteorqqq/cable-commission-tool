@@ -8,6 +8,7 @@ from web._ui import (
     fmt_money, truncate_units_text,
     status_badge, unit_pills, kpi_row, meta_row, section_title,
 )
+from web._table import dataframe_with_fulltext_panel
 from web._cache import calc_version, session_cache
 
 
@@ -128,9 +129,10 @@ def render_salesperson():
                 "未检测到「其他（无合同号）」条目。若源数据中确有无合同号明细，"
                 "请到「数据导入」页重新上传 Excel 以刷新。"
             )
-        st.dataframe(
+        dataframe_with_fulltext_panel(
             summary_df,
-            width="stretch",
+            key="salesperson_summary_selectable",
+            fulltext_cols=["订货单位"],
             height=min(400, 45 + len(summary_df) * 36),
             column_config={
                 "订货单位": st.column_config.TextColumn(

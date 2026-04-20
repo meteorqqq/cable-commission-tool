@@ -7,6 +7,7 @@ import pandas as pd
 
 from db.database import save_calc_session
 from web._ui import fmt_money, meta_row, kpi_row
+from web._table import dataframe_with_fulltext_panel
 from web._cache import (
     get_invoice_units_by_contract_sp, get_contract_overview, session_cache,
 )
@@ -296,9 +297,10 @@ def render_total(username: str):
                     if sp_df.empty:
                         st.caption("（未匹配到合同明细，请确认已完成利润/时效提成计算）")
                     else:
-                        st.dataframe(
+                        dataframe_with_fulltext_panel(
                             sp_df,
-                            width="stretch",
+                            key=f"total_sp_contracts_{sp}",
+                            fulltext_cols=["开票单位"],
                             height=min(400, 45 + len(sp_df) * 36),
                             column_config={
                                 "开票单位": st.column_config.TextColumn(
