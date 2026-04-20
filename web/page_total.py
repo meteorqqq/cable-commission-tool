@@ -7,18 +7,10 @@ import pandas as pd
 
 from engine.calculator import (
     build_contract_overview,
-    invoice_units_by_contract,
     invoice_units_by_contract_sp,
 )
 from db.database import save_calc_session
-from web._ui import (
-    fmt_money, truncate_units_text, status_badge, meta_row, kpi_row,
-    section_title,
-)
-
-
-def _fmt(v) -> str:
-    return fmt_money(v)
+from web._ui import fmt_money, truncate_units_text, meta_row, kpi_row
 
 
 def _status_of(d_amt: float, p_amt: float) -> str:
@@ -31,71 +23,6 @@ def _status_of(d_amt: float, p_amt: float) -> str:
     if p_amt + 1e-2 >= d_amt:
         return "已完成"
     return "部分回款"
-
-
-def _build_person_contracts(sp: str) -> pd.DataFrame:
-    """按销售员汇总其所有合同的: 发货/回款/利润提成/时效提成/状态/开票单位。"""
-    delivery_df = st.session_state.get("delivery_df")
-    payment_df = st.session_state.get("payment_df")
-    profit_df = st.session_state.get("profit_result")
-    timeliness_df = st.session_state.get("timeliness_result")
-
-    rows: dict[str, dict] = {}
-
-    if delivery_df is not None and not delivery_df.empty:
-        sub = delivery_df[delivery_df["销售员"].astype(str) == sp]
-        for pid, g in sub.groupby(sub["合同编号"].astype(str)):
-            rows.setdefault(pid, {"合同编号": pid})["发货额"] = float(g["发货金额"].sum())
-
-    if payment_df is not None and not payment_df.empty:
-        sub = payment_df[payment_df["销售员"].astype(str) == sp]
-        for pid, g in sub.groupby(sub["合同编号"].astype(str)):
-            rows.setdefault(pid, {"合同编号": pid})["回款额"] = float(g["回款金额"].sum())
-
-    if profit_df is not None and not profit_df.empty:
-        sub = profit_df[profit_df["销售员"].astype(str) == sp]
-        for _, r in sub.iterrows():
-            pid = str(r.get("合同编号", ""))
-            if not pid:
-                continue
-            slot = rows.setdefault(pid, {"合同编号": pid})
-            slot["利润提成"] = float(pd.to_numeric(r.get("利润提成金额"), errors="coerce") or 0)
-            if r.get("利润提成率"):
-                slot["利润提成率"] = str(r.get("利润提成率"))
-
-    if timeliness_df is not None and not timeliness_df.empty:
-        sub = timeliness_df[timeliness_df["销售员"].astype(str) == sp]
-        for pid, g in sub.groupby(sub["合同编号"].astype(str)):
-            slot = rows.setdefault(pid, {"合同编号": pid})
-            slot["时效提成"] = float(
-                pd.to_numeric(g["时效提成金额"], errors="coerce").fillna(0).sum()
-            )
-
-    inv_sp = invoice_units_by_contract_sp(delivery_df, payment_df)
-    inv_all = invoice_units_by_contract(delivery_df, payment_df)
-
-    out = []
-    for pid, v in rows.items():
-        d_amt = round(float(v.get("发货额", 0) or 0), 2)
-        p_amt = round(float(v.get("回款额", 0) or 0), 2)
-        out.append({
-            "合同编号": pid,
-            "开票单位": inv_sp.get((pid, sp)) or inv_all.get(pid, ""),
-            "发货额": d_amt,
-            "回款额": p_amt,
-            "未回款额": round(max(d_amt - p_amt, 0.0), 2),
-            "利润提成": round(float(v.get("利润提成", 0) or 0), 2),
-            "利润提成率": v.get("利润提成率", ""),
-            "时效提成": round(float(v.get("时效提成", 0) or 0), 2),
-            "状态": _status_of(d_amt, p_amt),
-        })
-
-    df = pd.DataFrame(out)
-    if df.empty:
-        return df
-    df["_sort"] = df["合同编号"].apply(lambda x: (1 if str(x) == "其他" else 0, str(x)))
-    df = df.sort_values(["_sort", "合同编号"]).drop(columns=["_sort"]).reset_index(drop=True)
-    return df
 
 
 def _build_total_df() -> pd.DataFrame | None:
@@ -237,16 +164,39 @@ def _build_contract_breakdown_by_salesperson() -> dict[str, pd.DataFrame]:
     return out
 
 
-def _status_of(d_amt: float, p_amt: float) -> str:
-    if d_amt <= 0 and p_amt > 0:
-        return "未发货（已收款）"
-    if d_amt <= 0:
-        return "未发货"
-    if p_amt <= 0:
-        return "未回款"
-    if p_amt + 1e-2 >= d_amt:
-        return "已完成"
-    return "部分回款"
+def _build_contract_breakdown_flat(total_df: pd.DataFrame) -> pd.DataFrame:
+    """扁平化：每位销售员 × 每笔合同一行，供 Excel 导出用。"""
+    breakdown = _build_contract_breakdown_by_salesperson()
+    if not breakdown:
+        return pd.DataFrame()
+    dept_map = {
+        str(r["销售员"]): str(r.get("销售部门", "") or "")
+        for _, r in total_df.iterrows()
+    }
+    rows = []
+    for sp, df in breakdown.items():
+        for _, r in df.iterrows():
+            rows.append({
+                "销售员": sp,
+                "销售部门": dept_map.get(sp, ""),
+                "合同编号": r["合同编号"],
+                "开票单位": r["开票单位"],
+                "合同发货额": r["合同发货额"],
+                "合同回款额": r["合同回款额"],
+                "利润提成率": r.get("利润提成率", ""),
+                "利润提成": r["利润提成"],
+                "回款时效提成": r["回款时效提成"],
+                "合同小计": r["合同小计"],
+                "状态": r["状态"],
+            })
+    if not rows:
+        return pd.DataFrame()
+    flat = pd.DataFrame(rows)
+    flat["_sort"] = flat["合同编号"].apply(
+        lambda x: (1 if str(x) == "其他" else 0, str(x))
+    )
+    flat = flat.sort_values(["销售员", "_sort", "合同编号"]).drop(columns=["_sort"]).reset_index(drop=True)
+    return flat
 
 
 def render_total(username: str):
@@ -382,6 +332,11 @@ def render_total(username: str):
         with col_dl:
             buf = io.BytesIO()
             sheets = {"总提成汇总": total_df}
+
+            flat_breakdown = _build_contract_breakdown_flat(total_df)
+            if not flat_breakdown.empty:
+                sheets["销售员合同明细"] = flat_breakdown
+
             ov = build_contract_overview(
                 st.session_state.get("delivery_df"),
                 st.session_state.get("payment_df"),
@@ -420,6 +375,11 @@ def render_total(username: str):
                                           label_visibility="collapsed")
             if st.button("保存到历史记录", use_container_width=True):
                 results = {"总提成汇总": total_df}
+
+                flat_breakdown = _build_contract_breakdown_flat(total_df)
+                if not flat_breakdown.empty:
+                    results["销售员合同明细"] = flat_breakdown
+
                 ov = build_contract_overview(
                     st.session_state.get("delivery_df"),
                     st.session_state.get("payment_df"),
