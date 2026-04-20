@@ -1,5 +1,6 @@
 """Streamlit 主入口"""
 
+import html
 import sys
 from pathlib import Path
 
@@ -63,7 +64,13 @@ html, body, [class*="stApp"], [class*="css"] {
     -webkit-font-smoothing: antialiased;
     text-rendering: optimizeLegibility;
 }
-.stApp { background: var(--color-bg); }
+.stApp {
+    background:
+        radial-gradient(1100px 520px at 18% -8%, rgba(212, 175, 55, 0.09) 0%, transparent 58%),
+        radial-gradient(900px 420px at 92% 6%, rgba(15, 23, 42, 0.04) 0%, transparent 52%),
+        linear-gradient(180deg, #F4F6FA 0%, #FFFFFF 38%, #FAFAF9 100%);
+    min-height: 100vh;
+}
 
 /* ───────── 隐藏 Streamlit Cloud / 框架的品牌元素 ───────── */
 header[data-testid="stHeader"]            { display: none !important; height: 0 !important; }
@@ -112,10 +119,19 @@ body > div[style*="position: fixed"][style*="bottom"][style*="right"] {
     max-width: 1480px;
 }
 
+/* 主内容区：轻量「纸张」感，与侧栏深色形成层次 */
+[data-testid="stAppViewContainer"] .main .block-container {
+    background: rgba(255, 255, 255, 0.72);
+    border: 1px solid rgba(226, 232, 240, 0.75);
+    border-radius: var(--radius-lg);
+    box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04), 0 12px 40px -18px rgba(15, 23, 42, 0.08);
+}
+
 /* ───────── Sidebar ───────── */
 section[data-testid="stSidebar"] > div:first-child {
-    background: #0B1220;
-    border-right: 1px solid rgba(255,255,255,0.05);
+    background: linear-gradient(168deg, #0E1628 0%, #0B1220 42%, #070C14 100%);
+    border-right: 1px solid rgba(255,255,255,0.06);
+    box-shadow: inset -1px 0 0 rgba(212, 175, 55, 0.07);
 }
 [data-testid="stSidebar"] { min-width: 232px; }
 
@@ -133,7 +149,53 @@ section[data-testid="stSidebar"] > div:first-child {
 }
 [data-testid="stSidebar"] .brand-sub {
     font-size: 0.75rem; color: #64748B !important;
-    margin-bottom: 0.6rem; letter-spacing: 0.2px;
+    margin-bottom: 0.75rem; letter-spacing: 0.2px;
+}
+[data-testid="stSidebar"] .brand-panel {
+    display: flex;
+    align-items: center;
+    gap: 0.65rem;
+    padding: 0.65rem 0.7rem;
+    margin: 0.35rem 0 0.35rem;
+    background: linear-gradient(135deg, rgba(255,255,255,0.06) 0%, rgba(255,255,255,0.02) 100%);
+    border: 1px solid rgba(255,255,255,0.08);
+    border-radius: 10px;
+    box-shadow: 0 1px 0 rgba(212, 175, 55, 0.12);
+}
+[data-testid="stSidebar"] .brand-panel .avatar {
+    width: 32px;
+    height: 32px;
+    border-radius: 8px;
+    background: linear-gradient(145deg, #E8C547 0%, var(--color-accent) 45%, var(--color-accent-700) 100%);
+    color: #0B1220;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-weight: 700;
+    font-size: 0.88rem;
+    flex-shrink: 0;
+    box-shadow: 0 0 0 2px rgba(15, 23, 42, 0.35), 0 2px 8px rgba(212, 175, 55, 0.25);
+}
+[data-testid="stSidebar"] .brand-panel .who {
+    display: flex;
+    flex-direction: column;
+    line-height: 1.2;
+    min-width: 0;
+}
+[data-testid="stSidebar"] .brand-panel .who .nm {
+    color: #F8FAFC;
+    font-size: 0.86rem;
+    font-weight: 600;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+[data-testid="stSidebar"] .brand-panel .who .id {
+    color: #64748B;
+    font-size: 0.7rem;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
 }
 [data-testid="stSidebar"] hr {
     border-color: rgba(255,255,255,0.06) !important;
@@ -193,10 +255,24 @@ section[data-testid="stSidebar"] > div:first-child {
     font-size: 1.5rem !important;
     font-weight: 700 !important;
     color: var(--color-ink) !important;
-    letter-spacing: -0.01em;
+    letter-spacing: -0.02em;
     margin: 0 0 1.25rem 0 !important;
-    padding-bottom: 0.6rem;
-    border-bottom: 1px solid var(--color-border-soft);
+    padding-bottom: 0.75rem;
+    border-bottom: none;
+    position: relative;
+}
+.main h1::after {
+    content: "";
+    position: absolute;
+    left: 0;
+    bottom: 0;
+    width: 52px;
+    height: 3px;
+    border-radius: 2px;
+    background: linear-gradient(90deg, var(--color-accent) 0%, rgba(212, 175, 55, 0.25) 100%);
+}
+.main h1 + * {
+    margin-top: 0.15rem;
 }
 .main h2, .main h3 {
     font-weight: 600 !important;
@@ -353,26 +429,115 @@ div[data-testid="stMetric"] [data-testid="stMetricDelta"] {
 /* ───────── Divider ───────── */
 .main hr { border-color: var(--color-border-soft) !important; }
 
-/* ───────── Login form ───────── */
+/* ───────── Login / 密码表单 ───────── */
+.rc-login-hero {
+    position: relative;
+    max-width: 480px;
+    margin: 2.5rem auto 0;
+    padding: 2rem 1.25rem 0.25rem;
+    text-align: center;
+}
+.rc-login-hero .rc-login-glow {
+    position: absolute;
+    inset: -28% -35% auto;
+    height: 300px;
+    background: radial-gradient(ellipse 70% 55% at 50% 40%, rgba(212, 175, 55, 0.18) 0%, transparent 70%);
+    pointer-events: none;
+    z-index: 0;
+}
+.rc-login-hero .rc-login-inner {
+    position: relative;
+    z-index: 1;
+}
+.rc-login-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.38rem 0.9rem;
+    border: 1px solid rgba(226, 232, 240, 0.95);
+    border-radius: 999px;
+    font-size: 0.74rem;
+    font-weight: 600;
+    letter-spacing: 0.06em;
+    color: var(--color-ink-soft);
+    background: rgba(255, 255, 255, 0.85);
+    box-shadow: var(--shadow-sm);
+}
+.rc-login-badge span.dot {
+    width: 7px;
+    height: 7px;
+    border-radius: 2px;
+    background: linear-gradient(145deg, #E8C547, var(--color-accent));
+    box-shadow: 0 0 0 1px rgba(212, 175, 55, 0.35);
+}
+.rc-login-h1 {
+    margin: 1rem 0 0.35rem;
+    font-size: clamp(1.38rem, 3.6vw, 1.72rem);
+    font-weight: 700;
+    letter-spacing: -0.03em;
+    color: var(--color-ink);
+    line-height: 1.25;
+}
+.rc-login-sub {
+    margin: 0;
+    color: var(--color-mute);
+    font-size: 0.9rem;
+    line-height: 1.5;
+}
+.rc-login-foot {
+    text-align: center;
+    font-size: 0.72rem;
+    color: var(--color-mute);
+    margin: 1.75rem auto 2rem;
+    max-width: 420px;
+    letter-spacing: 0.04em;
+}
+
 [data-testid="stForm"] {
-    max-width: 400px;
-    margin: 4rem auto 0;
-    background: #FFFFFF;
-    border: 1px solid var(--color-border);
+    max-width: 420px;
+    margin: 1.5rem auto 0;
+    background: rgba(255, 255, 255, 0.88);
+    backdrop-filter: blur(14px);
+    -webkit-backdrop-filter: blur(14px);
+    border: 1px solid rgba(228, 231, 235, 0.95);
     border-radius: var(--radius-lg);
-    padding: 2rem 1.8rem 1.5rem;
-    box-shadow: var(--shadow-lg);
+    padding: 2rem 2rem 1.65rem;
+    box-shadow:
+        0 1px 2px rgba(15, 23, 42, 0.05),
+        0 18px 48px -20px rgba(15, 23, 42, 0.14);
+    position: relative;
+    overflow: hidden;
+}
+[data-testid="stForm"]::before {
+    content: "";
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    height: 3px;
+    background: linear-gradient(90deg, var(--color-accent-700), var(--color-accent), #F0E6B8);
+    z-index: 1;
 }
 [data-testid="stForm"] .stButton > button {
-    background: var(--color-ink);
-    color: #FFFFFF;
-    border-color: var(--color-ink);
+    background: linear-gradient(180deg, #0F172A 0%, #020617 100%) !important;
+    color: #FFFFFF !important;
+    border: none !important;
     width: 100%;
-    padding: 0.55rem 1rem;
+    padding: 0.62rem 1rem !important;
+    font-weight: 600 !important;
+    box-shadow: 0 1px 2px rgba(15, 23, 42, 0.12);
 }
 [data-testid="stForm"] .stButton > button:hover {
-    background: #000;
-    border-color: #000;
+    background: linear-gradient(180deg, #1E293B 0%, #0F172A 100%) !important;
+    box-shadow: 0 4px 14px -4px rgba(15, 23, 42, 0.25);
+}
+[data-testid="stForm"] label,
+[data-testid="stForm"] [data-testid="stWidgetLabel"] p {
+    color: var(--color-ink-soft) !important;
+    font-weight: 500 !important;
+}
+[data-testid="stForm"] input {
+    border-radius: var(--radius-sm) !important;
 }
 
 /* ───────── Tabular numerals everywhere monetary numbers appear ───────── */
@@ -526,29 +691,60 @@ NAV_ITEMS = [
     "回款时效提成",
     "总提成汇总",
     "历史记录",
+    "账户设置",
 ]
 
 
 def load_auth_config():
+    """读取用户配置。
+
+    ``cookie.key`` / ``cookie.name`` / ``cookie.expiry_days`` 允许通过环境
+    变量或 ``st.secrets`` 覆盖，避免把密钥硬编码到 git 仓库里。
+
+    优先级：环境变量 > st.secrets > yaml 里的默认值。
+    """
+    import os as _os
+
     config_path = ROOT / "config.yaml"
     with open(config_path, encoding="utf-8") as f:
-        return yaml.safe_load(f)
+        config = yaml.safe_load(f) or {}
+
+    cookie = config.setdefault("cookie", {})
+
+    def _override(key: str, env_name: str, secrets_key: str, cast=lambda x: x):
+        val = _os.environ.get(env_name)
+        if val is None:
+            try:
+                if hasattr(st, "secrets") and secrets_key in st.secrets:
+                    val = st.secrets[secrets_key]
+            except Exception:
+                val = None
+        if val is not None:
+            try:
+                cookie[key] = cast(val)
+            except Exception:
+                pass
+
+    _override("key", "AUTH_COOKIE_KEY", "AUTH_COOKIE_KEY")
+    _override("name", "AUTH_COOKIE_NAME", "AUTH_COOKIE_NAME")
+    _override("expiry_days", "AUTH_COOKIE_EXPIRY_DAYS", "AUTH_COOKIE_EXPIRY_DAYS",
+              cast=lambda v: int(v))
+    return config
 
 
 def _render_login(authenticator) -> None:
     """未登录时渲染的品牌头 + 登录表单。"""
-    login_brand = (
-        '<div style="max-width:400px;margin:5rem auto 0;text-align:center;">'
-        '<div style="display:inline-flex;align-items:center;gap:.55rem;'
-        'padding:.35rem .75rem;border:1px solid #E5E7EB;border-radius:999px;'
-        'font-size:.74rem;font-weight:600;letter-spacing:.06em;color:#475569;'
-        'background:#FAFAF9;"><span style="width:6px;height:6px;'
-        'border-radius:2px;background:#D4AF37;"></span>锐洋集团 · 销售提成审核系统</div>'
-        '<h2 style="margin:1rem 0 .25rem;font-size:1.6rem;font-weight:700;'
-        'letter-spacing:-.01em;color:#0F172A;">锐洋集团提成计算工具</h2>'
-        '<p style="margin:0;color:#94A3B8;font-size:.88rem;">请使用授权账户登录以继续</p>'
-        '</div>'
-    )
+    login_brand = """
+<div class="rc-login-hero">
+  <div class="rc-login-glow" aria-hidden="true"></div>
+  <div class="rc-login-inner">
+    <div class="rc-login-badge"><span class="dot" aria-hidden="true"></span>
+      锐洋集团 · 销售提成审核系统</div>
+    <h1 class="rc-login-h1">锐洋集团提成计算工具</h1>
+    <p class="rc-login-sub">请使用授权账户登录以继续操作</p>
+  </div>
+</div>
+"""
     if hasattr(st, "html"):
         st.html(login_brand)
     else:
@@ -564,6 +760,11 @@ def _render_login(authenticator) -> None:
             "Captcha": "验证码",
         },
     )
+    foot = '<p class="rc-login-foot">内部系统 · 请妥善保管账户信息</p>'
+    if hasattr(st, "html"):
+        st.html(foot)
+    else:
+        st.markdown(foot, unsafe_allow_html=True)
 
 
 def main():
@@ -593,21 +794,17 @@ def main():
     display_name = st.session_state.get("name", username)
 
     initial = (display_name[:1] if display_name else username[:1] or "U").upper()
+    _dn = html.escape(str(display_name or ""))
+    _un = html.escape(str(username or ""))
     sidebar_brand = (
         '<div class="brand-title">锐洋集团提成计算</div>'
         '<div class="brand-sub">销售提成审核工作台</div>'
-        '<div style="display:flex;align-items:center;gap:.6rem;'
-        'padding:.55rem .65rem;margin:.4rem 0 .25rem;'
-        'background:rgba(255,255,255,.04);'
-        'border:1px solid rgba(255,255,255,.06);border-radius:8px;">'
-        f'<div style="width:28px;height:28px;border-radius:6px;'
-        f'background:#D4AF37;color:#0B1220;display:flex;'
-        f'align-items:center;justify-content:center;'
-        f'font-weight:700;font-size:.85rem;">{initial}</div>'
-        '<div style="display:flex;flex-direction:column;line-height:1.15;">'
-        f'<span style="color:#FFF;font-size:.85rem;font-weight:600;">{display_name}</span>'
-        f'<span style="color:#64748B;font-size:.7rem;">@{username}</span>'
-        '</div></div>'
+        '<div class="brand-panel">'
+        f'<div class="avatar" aria-hidden="true">{html.escape(initial)}</div>'
+        '<div class="who">'
+        f'<span class="nm">{_dn}</span>'
+        f'<span class="id">@{_un}</span>'
+        "</div></div>"
     )
     if "_current_page" not in st.session_state:
         st.session_state["_current_page"] = NAV_ITEMS[0]
@@ -667,6 +864,29 @@ def main():
         if changed:
             bump_data_version()
 
+    def _render_account():
+        st.header("账户设置")
+        st.caption("修改当前账户的密码；修改成功后下次登录使用新密码。")
+        with st.container(border=True):
+            try:
+                ok = authenticator.reset_password(
+                    username,
+                    location="main",
+                    fields={
+                        "Form name": "修改密码",
+                        "Current password": "当前密码",
+                        "New password": "新密码",
+                        "Repeat password": "确认新密码",
+                        "Reset": "提交修改",
+                    },
+                )
+                if ok:
+                    with open(ROOT / "config.yaml", "w", encoding="utf-8") as f:
+                        yaml.dump(config, f, allow_unicode=True)
+                    st.success("密码已更新")
+            except Exception as e:
+                st.error(f"修改失败：{e}")
+
     page_map = {
         "数据导入": lambda: render_import(username),
         "销售员详情": lambda: render_salesperson(),
@@ -675,6 +895,7 @@ def main():
         "回款时效提成": lambda: render_payment(username),
         "总提成汇总": lambda: render_total(username),
         "历史记录": lambda: render_history(username),
+        "账户设置": _render_account,
     }
     page_map[page]()
 

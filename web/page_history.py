@@ -9,54 +9,92 @@ from db.database import list_sessions, load_session_results, delete_session
 from engine.calculator import format_date_columns
 
 
+def _build_excel_bytes(results: dict[str, pd.DataFrame]) -> bytes:
+    buf = io.BytesIO()
+    with pd.ExcelWriter(buf, engine="openpyxl") as writer:
+        for name, df in results.items():
+            out = df.copy()
+            for col in out.columns:
+                if pd.api.types.is_datetime64_any_dtype(out[col]):
+                    out[col] = out[col].dt.strftime("%Y-%m-%d")
+            out.to_excel(writer, sheet_name=name[:31], index=False)
+    return buf.getvalue()
+
+
 def render_history(username: str):
     st.header("历史记录")
 
     sessions = list_sessions(username)
-
     if not sessions:
         st.info("暂无历史记录")
         return
 
-    for s in sessions:
+    c1, c2 = st.columns([2, 1], gap="medium")
+    with c1:
+        kw = st.text_input(
+            "按会话名称 / 结果类型搜索", value="",
+            placeholder="输入关键字过滤", key="history_search",
+        )
+    with c2:
+        all_types = sorted({t for s in sessions for t in s["result_types"]})
+        type_filter = st.multiselect(
+            "按结果类型筛选", options=all_types, default=[],
+            key="history_type_filter",
+        )
+
+    def _row_passes(s: dict) -> bool:
+        if kw and kw.strip():
+            k = kw.strip()
+            hit = (k in s["name"]) or any(k in t for t in s["result_types"])
+            if not hit:
+                return False
+        if type_filter:
+            if not any(t in type_filter for t in s["result_types"]):
+                return False
+        return True
+
+    visible = [s for s in sessions if _row_passes(s)]
+    st.caption(f"筛选结果：{len(visible)} / {len(sessions)} 条")
+
+    for s in visible:
         with st.expander(
             f"**{s['name']}**  /  {s['created_at']}  /  "
             f"{', '.join(s['result_types'])}",
             expanded=False,
         ):
-            col1, col2, col3 = st.columns([2, 2, 1])
-
-            with col1:
-                if st.button("查看详情", key=f"view_{s['id']}"):
-                    st.session_state[f"history_detail_{s['id']}"] = True
-
-            with col2:
-                if st.button("导出 Excel", key=f"export_{s['id']}"):
-                    results = load_session_results(s["id"])
-                    buf = io.BytesIO()
-                    with pd.ExcelWriter(buf, engine="openpyxl") as writer:
-                        for name, df in results.items():
-                            df.to_excel(writer, sheet_name=name[:31], index=False)
-                    st.download_button(
-                        "点击下载",
-                        buf.getvalue(),
-                        f"历史记录_{s['id']}.xlsx",
-                        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                        key=f"dl_{s['id']}",
-                    )
-
-            with col3:
-                if st.button("删除", key=f"del_{s['id']}", type="secondary"):
+            col_toggle, col_del = st.columns([4, 1])
+            with col_toggle:
+                show_key = f"history_detail_{s['id']}"
+                show = st.toggle(
+                    "显示详情与下载",
+                    value=st.session_state.get(show_key, False),
+                    key=f"tgl_{s['id']}",
+                )
+                st.session_state[show_key] = show
+            with col_del:
+                if st.button("删除", key=f"del_{s['id']}", type="secondary",
+                             use_container_width=True):
                     delete_session(s["id"])
                     st.success("已删除")
                     st.rerun()
 
-            if st.session_state.get(f"history_detail_{s['id']}"):
-                results = load_session_results(s["id"])
-                if results:
-                    tabs = st.tabs(list(results.keys()))
-                    for tab, (name, df) in zip(tabs, results.items()):
-                        with tab:
-                            st.dataframe(format_date_columns(df), width="stretch", height=350)
-                else:
-                    st.info("无数据")
+            if not st.session_state.get(show_key):
+                continue
+
+            results = load_session_results(s["id"])
+            if not results:
+                st.info("无数据")
+                continue
+
+            st.download_button(
+                "下载 Excel",
+                _build_excel_bytes(results),
+                f"历史记录_{s['id']}.xlsx",
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                key=f"dl_{s['id']}",
+            )
+
+            tabs = st.tabs(list(results.keys()))
+            for tab, (name, df) in zip(tabs, results.items()):
+                with tab:
+                    st.dataframe(format_date_columns(df), width="stretch", height=350)

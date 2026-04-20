@@ -6,23 +6,12 @@ import streamlit as st
 import pandas as pd
 
 from db.database import save_calc_session
+from engine.calculator import contract_status as _status_of
 from web._ui import fmt_money, meta_row, kpi_row
 from web._table import dataframe_with_fulltext_panel
 from web._cache import (
     get_invoice_units_by_contract_sp, get_contract_overview, session_cache,
 )
-
-
-def _status_of(d_amt: float, p_amt: float) -> str:
-    if d_amt <= 0 and p_amt > 0:
-        return "未发货（已收款）"
-    if d_amt <= 0 and p_amt <= 0:
-        return "未发货"
-    if p_amt <= 0:
-        return "未回款"
-    if p_amt + 1e-2 >= d_amt:
-        return "已完成"
-    return "部分回款"
 
 
 def _parse_pct_to_ratio(v) -> float:
@@ -336,6 +325,32 @@ def _build_export_template_df(total_df: pd.DataFrame) -> pd.DataFrame:
     return out
 
 
+def _collect_export_sheets(total_df: pd.DataFrame) -> dict[str, pd.DataFrame]:
+    """汇总所有用于导出 / 保存历史的 sheet，保证两处口径一致。"""
+    export_df = _build_export_template_df(total_df)
+    sheets: dict[str, pd.DataFrame] = {"总提成汇总": export_df}
+
+    flat_breakdown = _build_contract_breakdown_flat(total_df)
+    if not flat_breakdown.empty:
+        sheets["销售员合同明细"] = flat_breakdown
+
+    ov = get_contract_overview()
+    if ov is not None and not ov.empty:
+        sheets["合同编号汇总"] = ov
+
+    for key, state_key in [
+        ("交货明细", "delivery_df"),
+        ("回款明细", "payment_df"),
+        ("完成额度提成", "quota_result"),
+        ("利润提成", "profit_result"),
+        ("回款时效提成", "timeliness_result"),
+    ]:
+        df = st.session_state.get(state_key)
+        if df is not None and not df.empty:
+            sheets[key] = df
+    return sheets
+
+
 def render_total(username: str):
     st.header("总提成汇总")
 
@@ -474,29 +489,10 @@ def render_total(username: str):
         st.markdown("")
         col_dl, col_save = st.columns(2, gap="large")
 
+        sheets = _collect_export_sheets(total_df)
+
         with col_dl:
             buf = io.BytesIO()
-            export_df = _build_export_template_df(total_df)
-            sheets = {"总提成汇总": export_df}
-
-            flat_breakdown = _build_contract_breakdown_flat(total_df)
-            if not flat_breakdown.empty:
-                sheets["销售员合同明细"] = flat_breakdown
-
-            ov = get_contract_overview()
-            if ov is not None and not ov.empty:
-                sheets["合同编号汇总"] = ov
-            for key, state_key in [
-                ("交货明细", "delivery_df"),
-                ("回款明细", "payment_df"),
-                ("完成额度提成", "quota_result"),
-                ("利润提成", "profit_result"),
-                ("回款时效提成", "timeliness_result"),
-            ]:
-                df = st.session_state.get(state_key)
-                if df is not None and not df.empty:
-                    sheets[key] = df
-
             with pd.ExcelWriter(buf, engine="openpyxl") as writer:
                 for name, df in sheets.items():
                     out = df.copy()
@@ -517,24 +513,5 @@ def render_total(username: str):
             session_name = st.text_input("会话名称", value="", placeholder="输入备注名称",
                                           label_visibility="collapsed")
             if st.button("保存到历史记录", use_container_width=True):
-                results = {"总提成汇总": total_df}
-
-                flat_breakdown = _build_contract_breakdown_flat(total_df)
-                if not flat_breakdown.empty:
-                    results["销售员合同明细"] = flat_breakdown
-
-                ov = get_contract_overview()
-                if ov is not None and not ov.empty:
-                    results["合同编号汇总"] = ov
-                for key, state_key in [
-                    ("交货明细", "delivery_df"),
-                    ("回款明细", "payment_df"),
-                    ("完成额度提成", "quota_result"),
-                    ("利润提成", "profit_result"),
-                    ("回款时效提成", "timeliness_result"),
-                ]:
-                    df = st.session_state.get(state_key)
-                    if df is not None and not df.empty:
-                        results[key] = df
-                sid = save_calc_session(username, session_name or "未命名", results)
+                sid = save_calc_session(username, session_name or "未命名", sheets)
                 st.success(f"已保存 (ID: {sid})")

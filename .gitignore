@@ -12,3 +12,14 @@ build/
 .idea/
 .vscode/
 *.log
+
+# Node / Electron 残留
+node_modules/
+package.json
+package-lock.json
+
+# pytest 缓存
+.pytest_cache/
+
+# Windows 缩略图
+Thumbs.db

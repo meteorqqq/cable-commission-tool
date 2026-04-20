@@ -5,6 +5,7 @@ import pandas as pd
 
 from engine.calculator import (
     calc_payment_timeliness, DEFAULT_PAYMENT_TIERS, format_date_columns,
+    contract_status as _status_of,
 )
 from db.database import save_rules, load_rules
 from web._ui import (
@@ -14,23 +15,12 @@ from web._ui import (
 from web._table import dataframe_with_fulltext_panel
 from web._cache import (
     get_invoice_units_by_contract, get_invoice_units_by_contract_sp,
-    bump_calc_version, session_cache,
+    get_salesperson_dept_map, get_delivery_by_pid_sp, get_payment_by_pid_sp,
+    get_timeliness_by_pid_sp, bump_calc_version, session_cache,
 )
 
 
 _fmt_money = fmt_money
-
-
-def _status_of(d_amt: float, p_amt: float) -> str:
-    if d_amt == 0 and p_amt > 0:
-        return "未发货（已收款）"
-    if d_amt == 0:
-        return "未发货"
-    if p_amt <= 0:
-        return "未回款"
-    if p_amt + 1e-2 >= d_amt:
-        return "已完成"
-    return "部分回款"
 
 
 @session_cache("payment_contract_summary", scope="calc")
@@ -67,15 +57,7 @@ def _build_contract_summary(
                 pd.to_numeric(grp["时效提成金额"], errors="coerce").fillna(0).sum()
             )
 
-    dept_map: dict[str, str] = {}
-    for src in (delivery_df, payment_df):
-        if src is None or src.empty or "销售员" not in src.columns or "销售部门" not in src.columns:
-            continue
-        for _, r in src[["销售员", "销售部门"]].drop_duplicates().iterrows():
-            sp = str(r["销售员"]).strip()
-            dept = str(r["销售部门"]).strip() if pd.notna(r["销售部门"]) else ""
-            if sp and dept:
-                dept_map.setdefault(sp, dept)
+    dept_map = get_salesperson_dept_map()
 
     inv_sp_map = get_invoice_units_by_contract_sp()
     inv_map = get_invoice_units_by_contract()
@@ -264,6 +246,10 @@ def render_payment(username: str):
     filtered_rows = [r for _, r in summary_df.iterrows() if _row_passes(r)]
     st.caption(f"筛选结果：{len(filtered_rows)} / {len(summary_df)} 个合同")
 
+    del_lookup = get_delivery_by_pid_sp()
+    pay_lookup = get_payment_by_pid_sp()
+    tl_lookup = get_timeliness_by_pid_sp()
+
     for row in filtered_rows:
 
         pid = row["合同编号"]
@@ -311,18 +297,10 @@ def render_payment(username: str):
                 ("时效提成", _fmt_money(tl_amt), True),
             ]))
 
-            d_sub = delivery_df[
-                (delivery_df["合同编号"].astype(str) == pid)
-                & (delivery_df["销售员"].astype(str) == sp)
-            ].copy()
-            p_sub = payment_df[
-                (payment_df["合同编号"].astype(str) == pid)
-                & (payment_df["销售员"].astype(str) == sp)
-            ].copy()
-            tl_sub = timeliness_df[
-                (timeliness_df["合同编号"].astype(str) == pid)
-                & (timeliness_df["销售员"].astype(str) == sp)
-            ].copy() if not timeliness_df.empty else pd.DataFrame()
+            key = (str(pid), str(sp))
+            d_sub = del_lookup.get(key, pd.DataFrame())
+            p_sub = pay_lookup.get(key, pd.DataFrame())
+            tl_sub = tl_lookup.get(key, pd.DataFrame())
 
             col_d, col_p = st.columns(2, gap="large")
             with col_d:

@@ -5,10 +5,9 @@ import pandas as pd
 
 from engine.calculator import (
     calc_quota_commission_by_dept, DEFAULT_QUOTA_TIERS,
-    _build_salesperson_dept_map,
 )
 from db.database import save_rules, load_rules
-from web._cache import bump_calc_version
+from web._cache import bump_calc_version, get_salesperson_dept_map
 
 
 def _get_dept_list() -> list[str]:
@@ -25,7 +24,7 @@ def _calc_dept_totals() -> dict[str, float]:
     payment_df = st.session_state.get("payment_df")
     if delivery_df is None or payment_df is None:
         return {}
-    dept_map = _build_salesperson_dept_map(delivery_df, payment_df)
+    dept_map = get_salesperson_dept_map()
     pay = payment_df.copy()
     pay["_dept"] = pay["销售员"].map(dept_map)
     totals = {}
@@ -38,10 +37,9 @@ def _calc_dept_totals() -> dict[str, float]:
 def _calc_dept_delivery_totals() -> dict[str, float]:
     """按 销售员→销售部门 映射汇总各部门发货额（万元）。"""
     delivery_df = st.session_state.get("delivery_df")
-    payment_df = st.session_state.get("payment_df")
     if delivery_df is None or "发货金额" not in delivery_df.columns:
         return {}
-    dept_map = _build_salesperson_dept_map(delivery_df, payment_df)
+    dept_map = get_salesperson_dept_map()
     d = delivery_df.copy()
     d["_dept"] = d["销售员"].map(dept_map)
     totals: dict[str, float] = {}
@@ -143,6 +141,67 @@ def render_quota(username: str):
     if result is not None and not result.empty:
         with st.container(border=True):
             st.subheader("计算结果")
-            st.dataframe(result, width="stretch", height=400)
-            csv = result.to_csv(index=False).encode("utf-8-sig")
-            st.download_button("下载结果 CSV", csv, "完成额度提成.csv", "text/csv")
+
+            m1, m2, m3, m4 = st.columns(4, gap="medium")
+            total_sp = len(result)
+            total_pay = float(pd.to_numeric(
+                result.get("个人回款额(元)", 0), errors="coerce"
+            ).fillna(0).sum())
+            total_commission = float(pd.to_numeric(
+                result.get("完成额度提成(元)", 0), errors="coerce"
+            ).fillna(0).sum())
+            commissioned_n = int((pd.to_numeric(
+                result.get("完成额度提成(元)", 0), errors="coerce"
+            ).fillna(0) > 0).sum())
+            with m1:
+                st.metric("销售员数", f"{total_sp}")
+            with m2:
+                st.metric("回款合计", f"{total_pay:,.2f}")
+            with m3:
+                st.metric("提成合计", f"{total_commission:,.2f}")
+            with m4:
+                st.metric("有提成人数", f"{commissioned_n}")
+
+            all_depts = sorted({
+                str(d).strip() for d in result.get("销售部门", pd.Series(dtype=str)).dropna()
+                if str(d).strip()
+            })
+            fc1, fc2 = st.columns([1, 1], gap="medium")
+            with fc1:
+                filter_dept = st.multiselect(
+                    "按销售部门筛选", options=all_depts, default=[],
+                    key="quota_filter_dept",
+                )
+            with fc2:
+                search_sp = st.text_input(
+                    "按销售员姓名搜索", value="", placeholder="输入姓名片段",
+                    key="quota_filter_sp",
+                )
+
+            view = result
+            if filter_dept:
+                view = view[view["销售部门"].isin(filter_dept)]
+            if search_sp and search_sp.strip():
+                kw = search_sp.strip()
+                view = view[view["销售员"].astype(str).str.contains(kw, case=False, na=False)]
+
+            st.caption(f"筛选结果：{len(view)} / {len(result)} 人")
+            st.dataframe(view, width="stretch", height=400)
+
+            d1, d2 = st.columns(2, gap="medium")
+            with d1:
+                csv = view.to_csv(index=False).encode("utf-8-sig")
+                st.download_button(
+                    "下载 CSV", csv, "完成额度提成.csv", "text/csv",
+                    use_container_width=True,
+                )
+            with d2:
+                import io as _io
+                buf = _io.BytesIO()
+                with pd.ExcelWriter(buf, engine="openpyxl") as writer:
+                    view.to_excel(writer, sheet_name="完成额度提成", index=False)
+                st.download_button(
+                    "下载 Excel", buf.getvalue(), "完成额度提成.xlsx",
+                    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    use_container_width=True,
+                )

@@ -9,6 +9,8 @@
 """
 
 from __future__ import annotations
+import base64
+import gzip
 import io
 import json
 import os
@@ -19,6 +21,11 @@ import pandas as pd
 from sqlalchemy import create_engine
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import sessionmaker, Session
+
+try:
+    from sqlalchemy.dialects.postgresql import insert as _pg_insert
+except Exception:
+    _pg_insert = None  # SQLite 场景下不会用到
 
 from db.models import (
     Base, CalcSession, SessionResult, SavedRule, ContractPrice, ImportedSnapshot,
@@ -73,6 +80,13 @@ def get_session() -> Session:
     return _SessionLocal()
 
 
+def _is_postgres() -> bool:
+    try:
+        return _engine is not None and _engine.dialect.name == "postgresql"
+    except Exception:
+        return False
+
+
 # ── 计算会话 ──────────────────────────────────────────────
 
 def save_calc_session(username: str, name: str,
@@ -85,14 +99,10 @@ def save_calc_session(username: str, name: str,
 
         for rtype, df in results.items():
             if df is not None and not df.empty:
-                data = df.copy()
-                for col in data.columns:
-                    if pd.api.types.is_datetime64_any_dtype(data[col]):
-                        data[col] = data[col].dt.strftime("%Y-%m-%d")
                 sr = SessionResult(
                     session_id=cs.id,
                     result_type=rtype,
-                    data_json=data.to_json(orient="records", force_ascii=False),
+                    data_json=_dataframe_to_records_json(df),
                 )
                 sess.add(sr)
 
@@ -127,7 +137,8 @@ def load_session_results(session_id: int) -> dict[str, pd.DataFrame]:
     try:
         results = {}
         for sr in sess.query(SessionResult).filter_by(session_id=session_id).all():
-            results[sr.result_type] = pd.read_json(io.StringIO(sr.data_json), orient="records")
+            raw = _decode_json_blob(sr.data_json)
+            results[sr.result_type] = pd.read_json(io.StringIO(raw), orient="records")
         return results
     finally:
         sess.close()
@@ -147,9 +158,29 @@ def delete_session(session_id: int):
 # ── 规则持久化 ────────────────────────────────────────────
 
 def save_rules(username: str, rule_type: str, rule_data: object):
+    """把规则按 (username, rule_type) upsert 到 saved_rules。"""
     data_json = json.dumps(rule_data, ensure_ascii=False)
     sess = get_session()
     try:
+        if _is_postgres() and _pg_insert is not None:
+            stmt = _pg_insert(SavedRule.__table__).values(
+                username=username,
+                rule_type=rule_type,
+                rule_data_json=data_json,
+                updated_at=datetime.now(),
+            )
+            # 注意：saved_rules 没有 (username, rule_type) 的 UNIQUE 约束，
+            # 这里退回到"先查再改/插"的语义，和原实现保持一致。
+            existing = sess.query(SavedRule).filter_by(
+                username=username, rule_type=rule_type).first()
+            if existing:
+                existing.rule_data_json = data_json
+                existing.updated_at = datetime.now()
+            else:
+                sess.execute(stmt)
+            sess.commit()
+            return
+
         existing = sess.query(SavedRule).filter_by(
             username=username, rule_type=rule_type).first()
         if existing:
@@ -218,12 +249,34 @@ def load_contract_prices(username: str) -> list[dict]:
         sess.close()
 
 
+_GZ_PREFIX = "gz:"
+
+
+def _encode_json_blob(raw_json: str) -> str:
+    """对较大的 JSON 做 gzip + base64 压缩，小的直接明文存以便调试。"""
+    if not raw_json:
+        return raw_json
+    if len(raw_json) < 4096:
+        return raw_json
+    compressed = gzip.compress(raw_json.encode("utf-8"), compresslevel=6)
+    return _GZ_PREFIX + base64.b64encode(compressed).decode("ascii")
+
+
+def _decode_json_blob(blob: str | None) -> str | None:
+    if not blob:
+        return blob
+    if blob.startswith(_GZ_PREFIX):
+        compressed = base64.b64decode(blob[len(_GZ_PREFIX):])
+        return gzip.decompress(compressed).decode("utf-8")
+    return blob
+
+
 def _dataframe_to_records_json(df: pd.DataFrame) -> str:
     data = df.copy()
     for col in data.columns:
         if pd.api.types.is_datetime64_any_dtype(data[col]):
             data[col] = data[col].dt.strftime("%Y-%m-%d")
-    return data.to_json(orient="records", force_ascii=False)
+    return _encode_json_blob(data.to_json(orient="records", force_ascii=False))
 
 
 def save_import_snapshots(
@@ -249,6 +302,24 @@ def save_import_snapshots(
 
     sess = get_session()
     try:
+        if _is_postgres() and _pg_insert is not None:
+            set_cols = {"updated_at": datetime.now()}
+            if new_delivery is not None:
+                set_cols["delivery_json"] = new_delivery
+            if new_payment is not None:
+                set_cols["payment_json"] = new_payment
+            stmt = _pg_insert(ImportedSnapshot.__table__).values(
+                username=username,
+                delivery_json=new_delivery,
+                payment_json=new_payment,
+                updated_at=datetime.now(),
+            ).on_conflict_do_update(
+                index_elements=["username"], set_=set_cols,
+            )
+            sess.execute(stmt)
+            sess.commit()
+            return
+
         row = sess.query(ImportedSnapshot).filter_by(username=username).first()
         if row is None:
             row = ImportedSnapshot(
@@ -301,14 +372,16 @@ def load_import_snapshots(username: str) -> tuple[pd.DataFrame | None, pd.DataFr
         row = sess.query(ImportedSnapshot).filter_by(username=username).first()
         if row is None:
             return None, None
+        delivery_json = _decode_json_blob(row.delivery_json)
+        payment_json = _decode_json_blob(row.payment_json)
         delivery = (
-            pd.read_json(io.StringIO(row.delivery_json), orient="records")
-            if row.delivery_json
+            pd.read_json(io.StringIO(delivery_json), orient="records")
+            if delivery_json
             else None
         )
         payment = (
-            pd.read_json(io.StringIO(row.payment_json), orient="records")
-            if row.payment_json
+            pd.read_json(io.StringIO(payment_json), orient="records")
+            if payment_json
             else None
         )
         return _normalize_loaded_df(delivery), _normalize_loaded_df(payment)

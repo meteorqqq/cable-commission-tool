@@ -1,5 +1,6 @@
 """利润提成页"""
 
+import os
 import tempfile
 from pathlib import Path
 
@@ -12,7 +13,7 @@ from engine.calculator import (
 )
 from web._cache import (
     get_invoice_units_by_contract, get_invoice_units_by_contract_sp,
-    get_project_list, bump_calc_version,
+    get_project_list, bump_calc_version, bump_price_version, session_cache,
 )
 from web._table import dataframe_with_fulltext_panel
 from db.database import (
@@ -29,23 +30,27 @@ def _profit_result_for_arrow(df: pd.DataFrame) -> pd.DataFrame:
     return out
 
 
-def _build_price_df(username: str) -> pd.DataFrame:
+@session_cache("proj_delivery_totals", scope="data")
+def _proj_delivery_totals() -> dict:
     delivery_df = st.session_state.get("delivery_df")
+    if delivery_df is None or "合同编号" not in delivery_df.columns:
+        return {}
+    return {
+        pid: round(grp["发货金额"].sum(), 2)
+        for pid, grp in delivery_df.groupby("合同编号")
+    }
+
+
+@session_cache("saved_prices_map", scope="price")
+def _saved_prices_map(username: str) -> dict:
+    return {p["project_id"]: p for p in load_contract_prices(username)}
+
+
+def _build_price_df(username: str) -> pd.DataFrame:
     projects = get_project_list()
-
-    saved_prices = {p["project_id"]: p for p in load_contract_prices(username)}
+    saved_prices = _saved_prices_map(username)
     inv_map = get_invoice_units_by_contract()
-
-    proj_totals = st.session_state.get("_proj_delivery_totals_cache")
-    cache_key = f"_proj_delivery_totals::v{st.session_state.get('_data_version', 0)}"
-    if cache_key in st.session_state:
-        proj_totals = st.session_state[cache_key]
-    else:
-        proj_totals = {}
-        if delivery_df is not None and "合同编号" in delivery_df.columns:
-            for pid, grp in delivery_df.groupby("合同编号"):
-                proj_totals[pid] = round(grp["发货金额"].sum(), 2)
-        st.session_state[cache_key] = proj_totals
+    proj_totals = _proj_delivery_totals()
 
     rows = []
     for pid in projects:
@@ -108,30 +113,73 @@ def render_profit(username: str):
             uploaded = st.file_uploader("上传合同价格 Excel", type=["xls", "xlsx", "csv"],
                                          key="pricing_uploader")
             if uploaded is not None:
-                with tempfile.NamedTemporaryFile(delete=False, suffix=Path(uploaded.name).suffix) as tmp:
+                suffix = Path(uploaded.name).suffix
+                with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
                     tmp.write(uploaded.read())
                     tmp_path = tmp.name
                 try:
                     pricing_map = load_contract_pricing_excel(tmp_path)
-                    imported_rows = []
-                    for pid, p in pricing_map.items():
-                        imported_rows.append({
+                    imported_rows = [
+                        {
                             "project_id": pid,
                             "guide_price": p.guide_price,
                             "contract_price": p.contract_price,
                             "cost_price": p.cost_price,
-                        })
+                        }
+                        for pid, p in pricing_map.items()
+                    ]
                     save_contract_prices(username, imported_rows)
+                    bump_price_version()
                     st.success(f"已导入 {len(imported_rows)} 条合同价格")
                     st.rerun()
                 except Exception as e:
                     st.error(f"导入失败: {e}")
+                finally:
+                    try:
+                        os.unlink(tmp_path)
+                    except OSError:
+                        pass
 
     with st.container(border=True):
         st.subheader("合同价格表")
         price_df = _build_price_df(username)
+
+        fc1, fc2 = st.columns([2, 1], gap="medium")
+        with fc1:
+            search_kw = st.text_input(
+                "搜索合同编号或开票单位", value="", placeholder="输入关键字过滤表格",
+                key="price_search_kw",
+            )
+        with fc2:
+            fill_filter = st.selectbox(
+                "价格填写状态",
+                options=["全部", "已填价（任一 > 0）", "未填价（全为 0）", "成本价未填"],
+                index=0, key="price_filter_fill",
+            )
+
+        view_df = price_df
+        if search_kw and search_kw.strip():
+            kw = search_kw.strip()
+            mask = (
+                view_df["合同编号"].astype(str).str.contains(kw, case=False, na=False)
+                | view_df["开票单位"].astype(str).str.contains(kw, case=False, na=False)
+            )
+            view_df = view_df[mask]
+        if fill_filter != "全部":
+            gp = pd.to_numeric(view_df["指导价"], errors="coerce").fillna(0)
+            cp = pd.to_numeric(view_df["合同价"], errors="coerce").fillna(0)
+            cos = pd.to_numeric(view_df["成本价"], errors="coerce").fillna(0)
+            if fill_filter == "已填价（任一 > 0）":
+                view_df = view_df[(gp > 0) | (cp > 0) | (cos > 0)]
+            elif fill_filter == "未填价（全为 0）":
+                view_df = view_df[(gp == 0) & (cp == 0) & (cos == 0)]
+            elif fill_filter == "成本价未填":
+                view_df = view_df[cos == 0]
+
+        st.caption(f"显示 {len(view_df)} / {len(price_df)} 条；编辑后点击下方按钮保存。")
+
         edited_prices = st.data_editor(
-            price_df,
+            view_df.reset_index(drop=True),
             width="stretch",
             key="price_editor",
             disabled=["合同编号", "开票单位"],
@@ -152,11 +200,26 @@ def render_profit(username: str):
             },
         )
 
+        def _merge_edits_into_full(full_df: pd.DataFrame,
+                                   edited_subset: pd.DataFrame) -> pd.DataFrame:
+            """把筛选后编辑的子集合并回完整价格表，避免筛选时丢改动。"""
+            if edited_subset is None or edited_subset.empty:
+                return full_df
+            merged = full_df.set_index("合同编号")
+            sub = edited_subset.set_index("合同编号")
+            for pid, row in sub.iterrows():
+                if pid in merged.index:
+                    for col in ("指导价", "合同价", "成本价"):
+                        if col in row:
+                            merged.loc[pid, col] = row[col]
+            return merged.reset_index()
+
         c1, c2 = st.columns(2)
         with c1:
             if st.button("保存价格表", use_container_width=True):
+                merged = _merge_edits_into_full(price_df, edited_prices)
                 rows = []
-                for _, r in edited_prices.iterrows():
+                for _, r in merged.iterrows():
                     gp = pd.to_numeric(r["指导价"], errors="coerce")
                     cp = pd.to_numeric(r["合同价"], errors="coerce")
                     cos = pd.to_numeric(r["成本价"], errors="coerce")
@@ -167,11 +230,13 @@ def render_profit(username: str):
                         "cost_price": float(0 if pd.isna(cos) else cos),
                     })
                 save_contract_prices(username, rows)
+                bump_price_version()
                 st.success("价格已保存到数据库")
         with c2:
             if st.button("计算利润提成", type="primary", use_container_width=True):
+                merged = _merge_edits_into_full(price_df, edited_prices)
                 prices = {}
-                for _, r in edited_prices.iterrows():
+                for _, r in merged.iterrows():
                     pid = r["合同编号"]
                     gp = pd.to_numeric(r["指导价"], errors="coerce")
                     cp = pd.to_numeric(r["合同价"], errors="coerce")

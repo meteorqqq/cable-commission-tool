@@ -20,6 +20,28 @@ _DEPT_CODE_RE = re.compile(r"^[\s]*\d[\d]*\s*\|?\s*")
 _DEPT_PREFIX_RE = re.compile(r"^[\s]*\d[\d]*\s*[-－—_]\s*")
 
 
+def contract_status(d_amt: float, p_amt: float) -> str:
+    """按发货额 / 回款额判定合同状态。
+
+    口径与各页面保持一致：
+    - 未发货 / 未发货（已收款） / 未回款 / 部分回款 / 已完成
+    """
+    try:
+        d = float(d_amt or 0)
+        p = float(p_amt or 0)
+    except (TypeError, ValueError):
+        return "未发货"
+    if d <= 0 and p > 0:
+        return "未发货（已收款）"
+    if d <= 0:
+        return "未发货"
+    if p <= 0:
+        return "未回款"
+    if p + 1e-2 >= d:
+        return "已完成"
+    return "部分回款"
+
+
 def clean_dept_name(value) -> str:
     """去掉销售部门字段中的编号前缀，保留中文名称。
 
@@ -515,35 +537,35 @@ def build_salesperson_detail(
     if "回款日期" in pay_rows.columns:
         pay_rows["回款日期"] = pd.to_datetime(pay_rows["回款日期"], errors="coerce")
 
-    pids = set(del_rows["合同编号"].astype(str).unique()) if not del_rows.empty else set()
-    pids.update(pay_rows["合同编号"].astype(str).unique() if not pay_rows.empty else [])
+    del_by_pid: dict[str, pd.DataFrame] = {}
+    if not del_rows.empty and "合同编号" in del_rows.columns:
+        for pid, grp in del_rows.groupby(del_rows["合同编号"].astype(str)):
+            del_by_pid[pid] = grp
+    pay_by_pid: dict[str, pd.DataFrame] = {}
+    if not pay_rows.empty and "合同编号" in pay_rows.columns:
+        for pid, grp in pay_rows.groupby(pay_rows["合同编号"].astype(str)):
+            pay_by_pid[pid] = grp
+
+    pids = set(del_by_pid) | set(pay_by_pid)
 
     def _order_key(pid: str):
         return (1 if pid == "其他" else 0, pid)
 
+    empty_del = _empty(["发货日期", "发货金额", "订货单位", "开票单位"])
+    empty_pay = _empty(["回款日期", "回款金额", "开票单位", "核销金额"])
+
     contracts = []
     total_del = total_pay = 0.0
     for pid in sorted(pids, key=_order_key):
-        d = del_rows[del_rows["合同编号"].astype(str) == pid] if not del_rows.empty else _empty(
-            ["发货日期", "发货金额", "订货单位", "开票单位"])
-        p = pay_rows[pay_rows["合同编号"].astype(str) == pid] if not pay_rows.empty else _empty(
-            ["回款日期", "回款金额", "开票单位", "核销金额"])
+        d = del_by_pid.get(pid, empty_del)
+        p = pay_by_pid.get(pid, empty_pay)
 
         d_amt = float(d["发货金额"].sum()) if "发货金额" in d.columns else 0.0
         p_amt = float(p["回款金额"].sum()) if "回款金额" in p.columns else 0.0
         total_del += d_amt
         total_pay += p_amt
 
-        if d_amt == 0 and p_amt > 0:
-            status = "未发货（已收款）"
-        elif d_amt == 0:
-            status = "未发货"
-        elif p_amt <= 0:
-            status = "未回款"
-        elif p_amt + 1e-2 >= d_amt:
-            status = "已完成"
-        else:
-            status = "部分回款"
+        status = contract_status(d_amt, p_amt)
 
         def _unique_nonempty(series: pd.Series) -> list[str]:
             return [str(x).strip() for x in series.dropna().unique() if str(x).strip()]
@@ -625,7 +647,7 @@ def build_salesperson_detail(
     }
 
 
-def _build_salesperson_dept_map(
+def build_salesperson_dept_map(
     delivery_df: pd.DataFrame | None,
     payment_df: pd.DataFrame | None = None,
 ) -> dict[str, str]:
@@ -645,6 +667,9 @@ def _build_salesperson_dept_map(
                 continue
             mapping.setdefault(sp, dept)
     return mapping
+
+
+_build_salesperson_dept_map = build_salesperson_dept_map  # 兼容旧引用
 
 
 # ══════════════════════════════════════════════════════════════
@@ -733,24 +758,13 @@ def calc_profit_commission(delivery_df: pd.DataFrame,
 
     contracts = pd.merge(del_grp, pay_grp, on=["销售员", "合同编号"], how="outer").fillna(0)
 
-    def _status(d_amt: float, p_amt: float) -> str:
-        if d_amt <= 0 and p_amt > 0:
-            return "未发货（已收款）"
-        if d_amt <= 0 and p_amt <= 0:
-            return "未发货"
-        if p_amt <= 0:
-            return "未回款"
-        if p_amt + 1e-2 >= d_amt:
-            return "已完成"
-        return "部分回款"
-
     rows = []
     for _, r in contracts.iterrows():
         pid = r["合同编号"]
         pricing = contract_prices.get(pid)
         d_amt = float(r["合同发货额"])
         p_amt = float(r["合同回款额"])
-        status = _status(d_amt, p_amt)
+        status = contract_status(d_amt, p_amt)
 
         base = {
             "合同编号": pid,

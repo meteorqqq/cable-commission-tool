@@ -3,13 +3,16 @@
 import streamlit as st
 import pandas as pd
 
-from engine.calculator import list_salespersons, build_salesperson_detail, format_date_columns
+from engine.calculator import (
+    list_salespersons, build_salesperson_detail, format_date_columns,
+    contract_status,
+)
 from web._ui import (
     fmt_money, truncate_units_text,
     status_badge, unit_pills, kpi_row, meta_row, section_title,
 )
 from web._table import dataframe_with_fulltext_panel
-from web._cache import calc_version, session_cache
+from web._cache import session_cache
 
 
 @session_cache("salesperson_names", scope="data")
@@ -20,26 +23,16 @@ def _cached_salesperson_names() -> list[str]:
     )
 
 
+@session_cache("salesperson_detail", scope="calc")
 def _cached_salesperson_detail(sel: str) -> dict:
     """按 (calc_version, sel) 缓存单位销售员的 detail，避免切页回来重算。"""
-    v = calc_version()
-    key = f"_memo::salesperson_detail::v{v}::{sel}"
-    if key in st.session_state:
-        return st.session_state[key]
-    # 清理旧版本
-    prefix = "_memo::salesperson_detail::"
-    for k in list(st.session_state.keys()):
-        if isinstance(k, str) and k.startswith(prefix) and not k.startswith(f"{prefix}v{v}::"):
-            del st.session_state[k]
-    detail = build_salesperson_detail(
+    return build_salesperson_detail(
         sel,
         st.session_state.get("delivery_df"),
         st.session_state.get("payment_df"),
         profit_df=st.session_state.get("profit_result"),
         timeliness_df=st.session_state.get("timeliness_result"),
     )
-    st.session_state[key] = detail
-    return detail
 
 
 _fmt_money = fmt_money
@@ -314,13 +307,7 @@ def _render_other_section(other: dict):
             d_amt = float(d_sub["发货金额"].sum()) if "发货金额" in d_sub.columns else 0.0
             p_amt = float(p_sub["回款金额"].sum()) if "回款金额" in p_sub.columns else 0.0
             unpaid = max(d_amt - p_amt, 0.0)
-            sub_status = (
-                "已完成" if p_amt + 1e-2 >= d_amt and d_amt > 0
-                else "部分回款" if d_amt > 0 and p_amt > 0
-                else "未回款" if d_amt > 0
-                else "未发货（已收款）" if p_amt > 0
-                else "未发货"
-            )
+            sub_status = contract_status(d_amt, p_amt)
 
             unit_short = unit if len(unit) <= 28 else unit[:28] + "…"
             header_segs = [unit_short, f"回款 {_fmt_money(p_amt)}"]

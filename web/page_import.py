@@ -1,5 +1,6 @@
 """数据导入页"""
 
+import os
 import tempfile
 from pathlib import Path
 
@@ -25,7 +26,8 @@ def _upload_and_load(
 ):
     uploaded = st.file_uploader(label, type=["xls", "xlsx", "csv"], key=key)
     if uploaded is not None:
-        with tempfile.NamedTemporaryFile(delete=False, suffix=Path(uploaded.name).suffix) as tmp:
+        suffix = Path(uploaded.name).suffix
+        with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
             tmp.write(uploaded.read())
             tmp_path = tmp.name
         try:
@@ -39,6 +41,11 @@ def _upload_and_load(
             st.success(f"已加载 {len(df)} 条记录，并已写入数据库")
         except Exception as e:
             st.error(f"加载失败: {e}")
+        finally:
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
 
     df = st.session_state.get(state_key)
     if df is not None:
