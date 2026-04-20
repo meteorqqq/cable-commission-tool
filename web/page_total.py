@@ -1,13 +1,12 @@
 """总提成汇总页"""
 
-import io
-
 import streamlit as st
 import pandas as pd
 
 from db.database import save_calc_session
 from engine.calculator import contract_status as _status_of
 from web._ui import fmt_money, meta_row, kpi_row
+from web._download import render_df_download_buttons, render_multi_download_buttons
 from web._table import dataframe_with_fulltext_panel
 from web._cache import (
     get_invoice_units_by_contract_sp, get_contract_overview, session_cache,
@@ -477,11 +476,11 @@ def render_total(username: str):
                                 "合同小计": st.column_config.NumberColumn(format="%.2f"),
                             },
                         )
-                        csv = sp_df.to_csv(index=False).encode("utf-8-sig")
-                        st.download_button(
-                            f"下载 {sp} 的合同明细",
-                            csv, f"{sp}_合同明细.csv", "text/csv",
-                            key=f"dl_total_sp_{sp}",
+                        render_df_download_buttons(
+                            sp_df,
+                            base_filename=f"{sp}_合同明细",
+                            sheet_name="合同明细",
+                            key_prefix=f"dl_total_sp_{sp}",
                         )
                 shown += 1
 
@@ -494,21 +493,10 @@ def render_total(username: str):
         sheets = _collect_export_sheets(total_df)
 
         with col_dl:
-            buf = io.BytesIO()
-            with pd.ExcelWriter(buf, engine="openpyxl") as writer:
-                for name, df in sheets.items():
-                    out = df.copy()
-                    for col in out.columns:
-                        if pd.api.types.is_datetime64_any_dtype(out[col]):
-                            out[col] = out[col].dt.strftime("%Y-%m-%d")
-                    out.to_excel(writer, sheet_name=name, index=False)
-
-            st.download_button(
-                "导出全部结果 (Excel)",
-                buf.getvalue(),
-                "提成汇总.xlsx",
-                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                use_container_width=True,
+            render_multi_download_buttons(
+                sheets,
+                base_filename="提成汇总",
+                key_prefix="total_export_all",
             )
 
         with col_save:

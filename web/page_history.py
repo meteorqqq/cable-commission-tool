@@ -1,24 +1,11 @@
 """历史记录页"""
 
-import io
-
 import streamlit as st
 import pandas as pd
 
 from db.database import list_sessions, load_session_results, delete_session
 from engine.calculator import format_date_columns
-
-
-def _build_excel_bytes(results: dict[str, pd.DataFrame]) -> bytes:
-    buf = io.BytesIO()
-    with pd.ExcelWriter(buf, engine="openpyxl") as writer:
-        for name, df in results.items():
-            out = df.copy()
-            for col in out.columns:
-                if pd.api.types.is_datetime64_any_dtype(out[col]):
-                    out[col] = out[col].dt.strftime("%Y-%m-%d")
-            out.to_excel(writer, sheet_name=name[:31], index=False)
-    return buf.getvalue()
+from web._download import render_multi_download_buttons
 
 
 def render_history(username: str):
@@ -75,12 +62,10 @@ def render_history(username: str):
                 st.info("无数据")
                 continue
 
-            st.download_button(
-                "下载 Excel",
-                _build_excel_bytes(results),
-                f"历史记录_{s['id']}.xlsx",
-                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                key=f"dl_{s['id']}",
+            render_multi_download_buttons(
+                results,
+                base_filename=f"历史记录_{s['id']}",
+                key_prefix=f"history_dl_{s['id']}",
             )
 
             tabs = st.tabs(list(results.keys()))

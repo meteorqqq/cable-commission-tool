@@ -12,6 +12,7 @@ from web._ui import (
     fmt_money, split_units, truncate_units_text,
     status_badge, unit_pills, kpi_row, meta_row, section_title,
 )
+from web._download import render_df_download_buttons
 from web._table import dataframe_with_fulltext_panel
 from web._cache import (
     get_invoice_units_by_contract, get_invoice_units_by_contract_sp,
@@ -169,9 +170,12 @@ def render_payment(username: str):
                 "时效提成合计": st.column_config.NumberColumn(format="%.2f"),
             },
         )
-        csv = summary_df.to_csv(index=False).encode("utf-8-sig")
-        st.download_button("下载合同汇总", csv, "合同汇总.csv", "text/csv",
-                           key="dl_contract_summary")
+        render_df_download_buttons(
+            summary_df,
+            base_filename="合同汇总",
+            sheet_name="合同汇总",
+            key_prefix="payment_contract_summary",
+        )
 
     st.markdown("")
     st.subheader("合同明细")
@@ -351,6 +355,9 @@ def render_payment(username: str):
 
     with st.expander("原始时效提成明细（扁平表）", expanded=False):
         st.dataframe(format_date_columns(timeliness_df), width="stretch", height=400)
-        csv = timeliness_df.to_csv(index=False).encode("utf-8-sig")
-        st.download_button("下载时效明细", csv, "回款时效提成.csv", "text/csv",
-                           key="dl_timeliness_flat")
+        render_df_download_buttons(
+            timeliness_df,
+            base_filename="回款时效提成",
+            sheet_name="回款时效提成",
+            key_prefix="payment_timeliness_flat",
+        )

@@ -8,6 +8,7 @@ from engine.calculator import (
 )
 from db.database import save_rules, load_rules
 from web._cache import bump_calc_version, get_salesperson_dept_map
+from web._download import render_df_download_buttons
 
 
 def _get_dept_list() -> list[str]:
@@ -188,20 +189,9 @@ def render_quota(username: str):
             st.caption(f"筛选结果：{len(view)} / {len(result)} 人")
             st.dataframe(view, width="stretch", height=400)
 
-            d1, d2 = st.columns(2, gap="medium")
-            with d1:
-                csv = view.to_csv(index=False).encode("utf-8-sig")
-                st.download_button(
-                    "下载 CSV", csv, "完成额度提成.csv", "text/csv",
-                    use_container_width=True,
-                )
-            with d2:
-                import io as _io
-                buf = _io.BytesIO()
-                with pd.ExcelWriter(buf, engine="openpyxl") as writer:
-                    view.to_excel(writer, sheet_name="完成额度提成", index=False)
-                st.download_button(
-                    "下载 Excel", buf.getvalue(), "完成额度提成.xlsx",
-                    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                    use_container_width=True,
-                )
+            render_df_download_buttons(
+                view,
+                base_filename="完成额度提成",
+                sheet_name="完成额度提成",
+                key_prefix="quota_result",
+            )

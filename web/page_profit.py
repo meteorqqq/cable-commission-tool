@@ -15,6 +15,7 @@ from web._cache import (
     get_invoice_units_by_contract, get_invoice_units_by_contract_sp,
     get_project_list, bump_calc_version, bump_price_version, session_cache,
 )
+from web._download import render_df_download_buttons
 from web._table import dataframe_with_fulltext_panel
 from db.database import (
     save_rules, load_rules, save_contract_prices, load_contract_prices,
@@ -321,5 +322,9 @@ def render_profit(username: str):
                     "利润提成金额": st.column_config.NumberColumn(format="%.2f"),
                 },
             )
-            csv = display_df.to_csv(index=False).encode("utf-8-sig")
-            st.download_button("下载结果 CSV", csv, "利润提成.csv", "text/csv")
+            render_df_download_buttons(
+                display_df,
+                base_filename="利润提成",
+                sheet_name="利润提成",
+                key_prefix="profit_result",
+            )
