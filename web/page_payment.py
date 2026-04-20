@@ -185,11 +185,50 @@ def render_payment(username: str):
     st.subheader("合同明细")
     st.caption("点击展开查看该合同的发货明细、回款明细与时效匹配结果。")
 
-    filter_status = st.multiselect(
-        "按状态筛选",
-        options=["已完成", "部分回款", "未回款", "未发货", "未发货（已收款）"],
-        default=[],
-        key="payment_filter_status",
+    def _sorted_unique(col: str) -> list[str]:
+        if col not in summary_df.columns:
+            return []
+        vals = summary_df[col].dropna().astype(str).str.strip()
+        vals = [v for v in vals.unique() if v and v.lower() not in ("nan", "none")]
+        return sorted(vals)
+
+    all_pids = _sorted_unique("合同编号")
+    all_sps = _sorted_unique("销售员")
+    all_depts = _sorted_unique("销售部门")
+
+    inv_options: set[str] = set()
+    for s in summary_df.get("开票单位", pd.Series(dtype=str)).dropna():
+        for u in split_units(s):
+            if u:
+                inv_options.add(u)
+    all_invs = sorted(inv_options)
+
+    fc1, fc2 = st.columns(2, gap="medium")
+    with fc1:
+        filter_status = st.multiselect(
+            "按状态筛选",
+            options=["已完成", "部分回款", "未回款", "未发货", "未发货（已收款）"],
+            default=[],
+            key="payment_filter_status",
+        )
+        filter_pids = st.multiselect(
+            "按合同号筛选", options=all_pids, default=[],
+            key="payment_filter_pids",
+        )
+    with fc2:
+        filter_sps = st.multiselect(
+            "按销售员筛选", options=all_sps, default=[],
+            key="payment_filter_sps",
+        )
+        filter_depts = st.multiselect(
+            "按销售部门筛选", options=all_depts, default=[],
+            key="payment_filter_depts",
+        )
+
+    filter_invs = st.multiselect(
+        "按开票单位筛选", options=all_invs, default=[],
+        key="payment_filter_invs",
+        help="只要该合同的开票单位包含任一选中单位即保留。",
     )
 
     del_cols_pref = ["发货日期", "发货金额", "订货单位", "开票单位"]
@@ -197,9 +236,25 @@ def render_payment(username: str):
     tl_cols_pref = ["回款日期", "回款金额", "匹配发货日期", "回款周期(天)",
                     "时效提成比例", "时效提成金额"]
 
-    for _, row in summary_df.iterrows():
+    def _row_passes(row) -> bool:
         if filter_status and row["状态"] not in filter_status:
-            continue
+            return False
+        if filter_pids and str(row["合同编号"]) not in filter_pids:
+            return False
+        if filter_sps and str(row["销售员"]) not in filter_sps:
+            return False
+        if filter_depts and str(row.get("销售部门", "")) not in filter_depts:
+            return False
+        if filter_invs:
+            row_units = set(split_units(row.get("开票单位", "")))
+            if not row_units.intersection(filter_invs):
+                return False
+        return True
+
+    filtered_rows = [r for _, r in summary_df.iterrows() if _row_passes(r)]
+    st.caption(f"筛选结果：{len(filtered_rows)} / {len(summary_df)} 个合同")
+
+    for row in filtered_rows:
 
         pid = row["合同编号"]
         sp = row["销售员"]
