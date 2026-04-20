@@ -3,10 +3,7 @@
 from __future__ import annotations
 
 import io
-import os
-import sys
 import zipfile
-from pathlib import Path
 
 import pandas as pd
 import streamlit as st
@@ -29,46 +26,6 @@ def _safe_name(name: str) -> str:
     if not text:
         text = "export"
     return text.replace("/", "_").replace("\\", "_")
-
-
-def _default_save_dir() -> Path:
-    # PyInstaller 等打包场景：优先保存到 exe 同目录
-    if getattr(sys, "frozen", False):
-        try:
-            return Path(sys.executable).resolve().parent
-        except Exception:
-            pass
-    home = Path(os.path.expanduser("~"))
-    downloads = home / "Downloads"
-    if downloads.exists():
-        return downloads
-    return home
-
-
-def _use_local_save_mode() -> bool:
-    """仅打包桌面端使用本地直存；Web/Cloud 走浏览器下载。"""
-    return bool(getattr(sys, "frozen", False))
-
-
-def _save_bytes(path: Path, payload: bytes) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_bytes(payload)
-
-
-def _render_save_button(
-    *,
-    label: str,
-    output_path: Path,
-    payload: bytes,
-    key: str,
-    use_container_width: bool,
-) -> None:
-    if st.button(label, key=key, use_container_width=use_container_width):
-        try:
-            _save_bytes(output_path, payload)
-            st.success(f"已保存到本地：{output_path}")
-        except Exception as e:
-            st.error(f"保存失败：{e}")
 
 
 def dataframe_to_excel_bytes(df: pd.DataFrame, sheet_name: str = "Sheet1") -> bytes:
@@ -110,46 +67,24 @@ def render_df_download_buttons(
     excel_bytes = dataframe_to_excel_bytes(df, sheet_name=sheet_name)
 
     c1, c2 = st.columns(2, gap="medium")
-    if _use_local_save_mode():
-        save_dir = _default_save_dir()
-        csv_path = save_dir / f"{name}.csv"
-        xlsx_path = save_dir / f"{name}.xlsx"
-        with c1:
-            _render_save_button(
-                label="保存 CSV 到本地",
-                output_path=csv_path,
-                payload=csv_bytes,
-                key=f"{key_prefix}_csv_save",
-                use_container_width=use_container_width,
-            )
-        with c2:
-            _render_save_button(
-                label="保存 Excel 到本地",
-                output_path=xlsx_path,
-                payload=excel_bytes,
-                key=f"{key_prefix}_xlsx_save",
-                use_container_width=use_container_width,
-            )
-        st.caption(f"默认保存目录：{save_dir}")
-    else:
-        with c1:
-            st.download_button(
-                "下载 CSV",
-                csv_bytes,
-                f"{name}.csv",
-                CSV_MIME,
-                key=f"{key_prefix}_csv_dl",
-                use_container_width=use_container_width,
-            )
-        with c2:
-            st.download_button(
-                "下载 Excel",
-                excel_bytes,
-                f"{name}.xlsx",
-                EXCEL_MIME,
-                key=f"{key_prefix}_xlsx_dl",
-                use_container_width=use_container_width,
-            )
+    with c1:
+        st.download_button(
+            "下载 CSV",
+            csv_bytes,
+            f"{name}.csv",
+            CSV_MIME,
+            key=f"{key_prefix}_csv_dl",
+            use_container_width=use_container_width,
+        )
+    with c2:
+        st.download_button(
+            "下载 Excel",
+            excel_bytes,
+            f"{name}.xlsx",
+            EXCEL_MIME,
+            key=f"{key_prefix}_xlsx_dl",
+            use_container_width=use_container_width,
+        )
 
 
 def render_multi_download_buttons(
@@ -164,43 +99,21 @@ def render_multi_download_buttons(
     excel_bytes = dataframes_to_excel_bytes(results)
 
     c1, c2 = st.columns(2, gap="medium")
-    if _use_local_save_mode():
-        save_dir = _default_save_dir()
-        zip_path = save_dir / f"{name}.zip"
-        xlsx_path = save_dir / f"{name}.xlsx"
-        with c1:
-            _render_save_button(
-                label="保存 CSV (ZIP) 到本地",
-                output_path=zip_path,
-                payload=csv_zip,
-                key=f"{key_prefix}_zip_save",
-                use_container_width=use_container_width,
-            )
-        with c2:
-            _render_save_button(
-                label="保存 Excel 到本地",
-                output_path=xlsx_path,
-                payload=excel_bytes,
-                key=f"{key_prefix}_xlsx_save",
-                use_container_width=use_container_width,
-            )
-        st.caption(f"默认保存目录：{save_dir}")
-    else:
-        with c1:
-            st.download_button(
-                "下载 CSV (ZIP)",
-                csv_zip,
-                f"{name}.zip",
-                ZIP_MIME,
-                key=f"{key_prefix}_zip_dl",
-                use_container_width=use_container_width,
-            )
-        with c2:
-            st.download_button(
-                "下载 Excel",
-                excel_bytes,
-                f"{name}.xlsx",
-                EXCEL_MIME,
-                key=f"{key_prefix}_xlsx_dl",
-                use_container_width=use_container_width,
-            )
+    with c1:
+        st.download_button(
+            "下载 CSV (ZIP)",
+            csv_zip,
+            f"{name}.zip",
+            ZIP_MIME,
+            key=f"{key_prefix}_zip_dl",
+            use_container_width=use_container_width,
+        )
+    with c2:
+        st.download_button(
+            "下载 Excel",
+            excel_bytes,
+            f"{name}.xlsx",
+            EXCEL_MIME,
+            key=f"{key_prefix}_xlsx_dl",
+            use_container_width=use_container_width,
+        )
