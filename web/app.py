@@ -691,7 +691,6 @@ NAV_ITEMS = [
     "回款时效提成",
     "总提成汇总",
     "历史记录",
-    "账户设置",
 ]
 
 
@@ -864,29 +863,6 @@ def main():
         if changed:
             bump_data_version()
 
-    def _render_account():
-        st.header("账户设置")
-        st.caption("修改当前账户的密码；修改成功后下次登录使用新密码。")
-        with st.container(border=True):
-            try:
-                ok = authenticator.reset_password(
-                    username,
-                    location="main",
-                    fields={
-                        "Form name": "修改密码",
-                        "Current password": "当前密码",
-                        "New password": "新密码",
-                        "Repeat password": "确认新密码",
-                        "Reset": "提交修改",
-                    },
-                )
-                if ok:
-                    with open(ROOT / "config.yaml", "w", encoding="utf-8") as f:
-                        yaml.dump(config, f, allow_unicode=True)
-                    st.success("密码已更新")
-            except Exception as e:
-                st.error(f"修改失败：{e}")
-
     page_map = {
         "数据导入": lambda: render_import(username),
         "销售员详情": lambda: render_salesperson(),
@@ -895,7 +871,6 @@ def main():
         "回款时效提成": lambda: render_payment(username),
         "总提成汇总": lambda: render_total(username),
         "历史记录": lambda: render_history(username),
-        "账户设置": _render_account,
     }
     page_map[page]()
 
