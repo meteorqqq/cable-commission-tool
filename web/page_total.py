@@ -25,6 +25,22 @@ def _status_of(d_amt: float, p_amt: float) -> str:
     return "部分回款"
 
 
+def _parse_pct_to_ratio(v) -> float:
+    """把 '1.25%' / 1.25 / 0.0125 等形式统一转成比例(0~1)。"""
+    if v is None:
+        return 0.0
+    s = str(v).strip()
+    if not s or s.lower() in ("nan", "none"):
+        return 0.0
+    try:
+        if s.endswith("%"):
+            return float(s[:-1]) / 100.0
+        x = float(s)
+        return x / 100.0 if x > 1 else x
+    except Exception:
+        return 0.0
+
+
 @session_cache("total_summary_df", scope="calc")
 def _build_total_df() -> pd.DataFrame | None:
     quota_df = st.session_state.get("quota_result")
@@ -92,6 +108,7 @@ def _build_contract_breakdown_by_salesperson() -> dict[str, pd.DataFrame]:
     """为每位销售员构建"按合同"明细表，合并利润 / 回款时效 / 发货 / 回款 等信息。"""
     delivery_df = st.session_state.get("delivery_df")
     payment_df = st.session_state.get("payment_df")
+    quota_df = st.session_state.get("quota_result")
     profit_df = st.session_state.get("profit_result")
     timeliness_df = st.session_state.get("timeliness_result")
 
@@ -115,6 +132,14 @@ def _build_contract_breakdown_by_salesperson() -> dict[str, pd.DataFrame]:
         for (sp, pid), amt in grp.items():
             rows.setdefault(_key(sp, pid), {})["合同回款额"] = float(amt)
 
+    quota_rate_map: dict[str, float] = {}
+    if quota_df is not None and not quota_df.empty and "销售员" in quota_df.columns:
+        for _, r in quota_df.iterrows():
+            sp = str(r.get("销售员", "")).strip()
+            if not sp:
+                continue
+            quota_rate_map[sp] = _parse_pct_to_ratio(r.get("提成比例", 0))
+
     profit_lookup: dict[tuple[str, str], dict] = {}
     if profit_df is not None and not profit_df.empty:
         for _, r in profit_df.iterrows():
@@ -122,15 +147,26 @@ def _build_contract_breakdown_by_salesperson() -> dict[str, pd.DataFrame]:
             profit_lookup[k] = {
                 "利润提成金额": float(r.get("利润提成金额", 0) or 0),
                 "利润提成率": r.get("利润提成率", ""),
+                "利润系数": float(r.get("K系数", 0) or 0) if pd.notna(r.get("K系数", None)) else 0.0,
                 "利润分类": r.get("利润分类", ""),
                 "状态": r.get("状态", ""),
             }
 
-    tl_lookup: dict[tuple[str, str], float] = {}
+    tl_lookup: dict[tuple[str, str], dict] = {}
     if timeliness_df is not None and not timeliness_df.empty:
-        grp = timeliness_df.groupby(["销售员", "合同编号"])["时效提成金额"].sum()
-        for (sp, pid), amt in grp.items():
-            tl_lookup[_key(sp, pid)] = float(amt)
+        for (sp, pid), grp in timeliness_df.groupby(["销售员", "合同编号"]):
+            pay = pd.to_numeric(grp.get("回款金额", 0), errors="coerce").fillna(0)
+            tl_amt = pd.to_numeric(grp.get("时效提成金额", 0), errors="coerce").fillna(0)
+            days = pd.to_numeric(grp.get("回款周期(天)", 0), errors="coerce").fillna(0)
+            pay_sum = float(pay.sum())
+            tl_sum = float(tl_amt.sum())
+            ratio = (tl_sum / pay_sum) if pay_sum > 1e-9 else 0.0
+            day_avg = float((days * pay).sum() / pay_sum) if pay_sum > 1e-9 else 0.0
+            tl_lookup[_key(sp, pid)] = {
+                "时效提成金额": tl_sum,
+                "时效系数": ratio,
+                "时效天数": day_avg,
+            }
 
     # 合并所有 (sp, pid)
     all_keys = set(rows) | set(profit_lookup) | set(tl_lookup)
@@ -141,8 +177,14 @@ def _build_contract_breakdown_by_salesperson() -> dict[str, pd.DataFrame]:
         prof = profit_lookup.get((sp, pid), {})
         d_amt = round(base.get("合同发货额", 0.0), 2)
         p_amt = round(base.get("合同回款额", 0.0), 2)
+        quota_ratio = quota_rate_map.get(sp, 0.0)
+        quota_amt = round(p_amt * quota_ratio, 2)
         profit_amt = round(prof.get("利润提成金额", 0.0), 2)
-        tl_amt = round(tl_lookup.get((sp, pid), 0.0), 2)
+        profit_ratio = _parse_pct_to_ratio(prof.get("利润提成率", ""))
+        tl_info = tl_lookup.get((sp, pid), {})
+        tl_amt = round(float(tl_info.get("时效提成金额", 0.0)), 2)
+        tl_ratio = float(tl_info.get("时效系数", 0.0))
+        tl_days = float(tl_info.get("时效天数", 0.0))
         status = prof.get("状态") or _status_of(d_amt, p_amt)
 
         by_sp.setdefault(sp, []).append({
@@ -150,10 +192,16 @@ def _build_contract_breakdown_by_salesperson() -> dict[str, pd.DataFrame]:
             "开票单位": inv_sp_map.get((pid, sp), ""),
             "合同发货额": d_amt,
             "合同回款额": p_amt,
+            "完成额度系数": f"{quota_ratio * 100:.2f}%",
+            "完成额度提成": quota_amt,
+            "利润系数": round(float(prof.get("利润系数", 0.0)), 4),
             "利润提成率": prof.get("利润提成率", "") or "",
+            "利润系数(提成率)": f"{profit_ratio * 100:.2f}%",
             "利润提成": profit_amt,
+            "时效天数": round(tl_days, 1),
+            "时效系数": f"{tl_ratio * 100:.2f}%",
             "回款时效提成": tl_amt,
-            "合同小计": round(profit_amt + tl_amt, 2),
+            "合同小计": round(quota_amt + profit_amt + tl_amt, 2),
             "状态": status,
         })
 
@@ -185,8 +233,14 @@ def _build_contract_breakdown_flat(total_df: pd.DataFrame) -> pd.DataFrame:
                 "开票单位": r["开票单位"],
                 "合同发货额": r["合同发货额"],
                 "合同回款额": r["合同回款额"],
+                "完成额度系数": r.get("完成额度系数", ""),
+                "完成额度提成": r.get("完成额度提成", 0.0),
+                "利润系数": r.get("利润系数", 0.0),
                 "利润提成率": r.get("利润提成率", ""),
+                "利润系数(提成率)": r.get("利润系数(提成率)", ""),
                 "利润提成": r["利润提成"],
+                "时效天数": r.get("时效天数", 0.0),
+                "时效系数": r.get("时效系数", ""),
                 "回款时效提成": r["回款时效提成"],
                 "合同小计": r["合同小计"],
                 "状态": r["状态"],
@@ -297,11 +351,19 @@ def render_total(username: str):
                     if sp_df.empty:
                         st.caption("（未匹配到合同明细，请确认已完成利润/时效提成计算）")
                     else:
+                        display_cols = [
+                            "合同编号", "开票单位", "合同发货额", "合同回款额",
+                            "完成额度系数", "完成额度提成",
+                            "利润系数", "利润提成率", "利润系数(提成率)", "利润提成",
+                            "时效天数", "时效系数", "回款时效提成",
+                            "合同小计", "状态",
+                        ]
+                        show_df = sp_df[[c for c in display_cols if c in sp_df.columns]]
                         dataframe_with_fulltext_panel(
-                            sp_df,
+                            show_df,
                             key=f"total_sp_contracts_{sp}",
                             fulltext_cols=["开票单位"],
-                            height=min(400, 45 + len(sp_df) * 36),
+                            height=min(400, 45 + len(show_df) * 36),
                             column_config={
                                 "开票单位": st.column_config.TextColumn(
                                     "开票单位",
@@ -309,7 +371,10 @@ def render_total(username: str):
                                 ),
                                 "合同发货额": st.column_config.NumberColumn(format="%.2f"),
                                 "合同回款额": st.column_config.NumberColumn(format="%.2f"),
+                                "完成额度提成": st.column_config.NumberColumn(format="%.2f"),
+                                "利润系数": st.column_config.NumberColumn(format="%.4f"),
                                 "利润提成": st.column_config.NumberColumn(format="%.2f"),
+                                "时效天数": st.column_config.NumberColumn(format="%.1f"),
                                 "回款时效提成": st.column_config.NumberColumn(format="%.2f"),
                                 "合同小计": st.column_config.NumberColumn(format="%.2f"),
                             },
