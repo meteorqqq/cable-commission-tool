@@ -255,6 +255,87 @@ def _build_contract_breakdown_flat(total_df: pd.DataFrame) -> pd.DataFrame:
     return flat
 
 
+def _build_export_template_df(total_df: pd.DataFrame) -> pd.DataFrame:
+    """按用户给定模板导出（列名/顺序固定）。"""
+    flat = _build_contract_breakdown_flat(total_df)
+    if flat.empty:
+        # 即便空数据也返回固定表头，保证导出格式稳定
+        return pd.DataFrame(columns=[
+            "销售员", "销售部门", "总销售金额", "回款金额",
+            "完成额度提成(元)", "完成比系数",
+            "利润提成(元)", "利润系数",
+            "回款时效提成(元)", "时效（天数）", "时效系数",
+            "总提成（元）", "合同号", "客户名",
+        ])
+
+    # 销售员 -> 部门/完成额度系数（来自 quota_result）
+    quota_df = st.session_state.get("quota_result")
+    dept_map: dict[str, str] = {}
+    quota_ratio_map: dict[str, float] = {}
+    if quota_df is not None and not quota_df.empty:
+        for _, r in quota_df.iterrows():
+            sp = str(r.get("销售员", "")).strip()
+            if not sp:
+                continue
+            dept_map[sp] = str(r.get("销售部门", "") or "")
+            quota_ratio_map[sp] = _parse_pct_to_ratio(r.get("提成比例", 0))
+
+    # 时效天数来自 timeliness_result 的合同级加权平均
+    tl_df = st.session_state.get("timeliness_result")
+    tl_days_map: dict[tuple[str, str], float] = {}
+    if tl_df is not None and not tl_df.empty:
+        for (sp, pid), grp in tl_df.groupby(["销售员", "合同编号"]):
+            pay = pd.to_numeric(grp.get("回款金额", 0), errors="coerce").fillna(0)
+            days = pd.to_numeric(grp.get("回款周期(天)", 0), errors="coerce").fillna(0)
+            pay_sum = float(pay.sum())
+            day_avg = float((days * pay).sum() / pay_sum) if pay_sum > 1e-9 else 0.0
+            tl_days_map[(str(sp), str(pid))] = day_avg
+
+    rows = []
+    for _, r in flat.iterrows():
+        sp = str(r.get("销售员", "") or "")
+        pid = str(r.get("合同编号", "") or "")
+        pay_amt = float(r.get("合同回款额", 0) or 0)
+        sale_amt = float(r.get("合同发货额", 0) or 0)
+        quota_ratio = float(quota_ratio_map.get(sp, 0.0))
+        quota_amt = float(r.get("完成额度提成", 0) or 0)
+        profit_amt = float(r.get("利润提成", 0) or 0)
+        tl_amt = float(r.get("回款时效提成", 0) or 0)
+        tl_days = float(tl_days_map.get((sp, pid), r.get("时效天数", 0) or 0))
+
+        # 优先用合同小计，兜底时三项相加
+        total_amt = float(r.get("合同小计", quota_amt + profit_amt + tl_amt) or 0)
+
+        rows.append({
+            "销售员": sp,
+            "销售部门": dept_map.get(sp, str(r.get("销售部门", "") or "")),
+            "总销售金额": round(sale_amt, 2),
+            "回款金额": round(pay_amt, 2),
+            "完成额度提成(元)": round(quota_amt, 2),
+            "完成比系数": f"{quota_ratio * 100:.2f}%",
+            "利润提成(元)": round(profit_amt, 2),
+            "利润系数": r.get("利润系数", 0),
+            "回款时效提成(元)": round(tl_amt, 2),
+            "时效（天数）": round(tl_days, 1),
+            "时效系数": r.get("时效系数", ""),
+            "总提成（元）": round(total_amt, 2),
+            "合同号": pid,
+            "客户名": str(r.get("开票单位", "") or ""),
+        })
+
+    out = pd.DataFrame(rows)
+    # 严格固定列顺序
+    cols = [
+        "销售员", "销售部门", "总销售金额", "回款金额",
+        "完成额度提成(元)", "完成比系数",
+        "利润提成(元)", "利润系数",
+        "回款时效提成(元)", "时效（天数）", "时效系数",
+        "总提成（元）", "合同号", "客户名",
+    ]
+    out = out[cols]
+    return out
+
+
 def render_total(username: str):
     st.header("总提成汇总")
 
@@ -395,7 +476,8 @@ def render_total(username: str):
 
         with col_dl:
             buf = io.BytesIO()
-            sheets = {"总提成汇总": total_df}
+            export_df = _build_export_template_df(total_df)
+            sheets = {"总提成汇总": export_df}
 
             flat_breakdown = _build_contract_breakdown_flat(total_df)
             if not flat_breakdown.empty:
