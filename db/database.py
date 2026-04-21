@@ -357,6 +357,14 @@ def _normalize_loaded_df(df: pd.DataFrame | None) -> pd.DataFrame | None:
             df["合同编号"].isin(["", "nan", "None"]) | df["合同编号"].isna(),
             "合同编号",
         ] = "其他"
+    # 旧快照可能没有「主合同编号」列，回落到合同编号自身以保证计算链路兼容
+    if "合同编号" in df.columns:
+        if "主合同编号" not in df.columns:
+            df["主合同编号"] = df["合同编号"]
+        else:
+            df["主合同编号"] = df["主合同编号"].astype("string").str.strip()
+            empty_main = df["主合同编号"].isin(["", "nan", "None"]) | df["主合同编号"].isna()
+            df.loc[empty_main, "主合同编号"] = df.loc[empty_main, "合同编号"]
     for dcol in ("发货日期", "回款日期"):
         if dcol in df.columns:
             df[dcol] = pd.to_datetime(df[dcol], errors="coerce")

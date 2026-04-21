@@ -19,6 +19,7 @@ from engine.calculator import (
     calc_profit_commission,
     calc_payment_timeliness,
     build_salesperson_dept_map,
+    build_main_contract_map,
     ContractPricing,
 )
 
@@ -179,6 +180,80 @@ def test_calc_profit_commission_handles_unpriced_contracts():
     c2 = res[res["合同编号"] == "C2"].iloc[0]
     assert c2["利润提成金额"] == 0
     assert c2["利润分类"] == "未设定价格"
+
+
+def test_build_main_contract_map_defaults_to_self():
+    d = pd.DataFrame({"合同编号": ["A", "B", "C"]})
+    p = pd.DataFrame({"合同编号": ["A", "D"]})
+    m = build_main_contract_map(d, p)
+    # 没有"主合同编号"列时，main == self
+    assert m == {"A": "A", "B": "B", "C": "C", "D": "D"}
+
+
+def test_build_main_contract_map_reads_parent():
+    d = pd.DataFrame({
+        "合同编号": ["S1", "S2", "M1", "X"],
+        "主合同编号": ["M1", "M1", "M1", ""],   # X 留空 → 回落自身
+    })
+    p = pd.DataFrame({
+        "合同编号": ["S1", "Y"],
+        "主合同编号": ["M1", "M2"],
+    })
+    m = build_main_contract_map(d, p)
+    assert m["S1"] == "M1"
+    assert m["S2"] == "M1"
+    assert m["M1"] == "M1"
+    assert m["X"] == "X"
+    assert m["Y"] == "M2"
+
+
+def test_calc_profit_commission_sub_uses_parent_pricing():
+    """主合同有价时，分项沿用主合同 K 系数；分项自身未录入的价会被忽略。"""
+    d = pd.DataFrame([
+        {"销售员": "张三", "销售部门": "东部", "合同编号": "SUB-1",
+         "发货金额": 10000, "发货日期": pd.Timestamp("2024-01-10")},
+        {"销售员": "张三", "销售部门": "东部", "合同编号": "SUB-2",
+         "发货金额": 20000, "发货日期": pd.Timestamp("2024-01-20")},
+    ])
+    p = pd.DataFrame([
+        {"销售员": "张三", "销售部门": "东部", "合同编号": "SUB-1",
+         "回款金额": 10000, "回款日期": pd.Timestamp("2024-02-10")},
+        {"销售员": "张三", "销售部门": "东部", "合同编号": "SUB-2",
+         "回款金额": 20000, "回款日期": pd.Timestamp("2024-02-20")},
+    ])
+    prices = {"MAIN-1": ContractPricing("MAIN-1", 100, 110, 80)}  # k = 1.1
+    main_map = {"SUB-1": "MAIN-1", "SUB-2": "MAIN-1", "MAIN-1": "MAIN-1"}
+
+    res = calc_profit_commission(d, p, prices, main_contract_map=main_map)
+    assert set(res["合同编号"]) == {"SUB-1", "SUB-2"}
+
+    for _, row in res.iterrows():
+        assert row["系数来源"] == "主合同"
+        assert row["K系数"] == pytest.approx(1.1)
+        assert row["主合同编号"] == "MAIN-1"
+        # 沿用主合同 K=1.1，提成 = 回款 × 0.2% × 1.1
+        expected = round(row["合同回款额"] * 0.002 * 1.1, 2)
+        assert row["利润提成金额"] == pytest.approx(expected)
+
+
+def test_calc_profit_commission_falls_back_to_self_when_parent_missing():
+    d = pd.DataFrame([
+        {"销售员": "张三", "销售部门": "东部", "合同编号": "SUB-1",
+         "发货金额": 10000, "发货日期": pd.Timestamp("2024-01-10")},
+    ])
+    p = pd.DataFrame([
+        {"销售员": "张三", "销售部门": "东部", "合同编号": "SUB-1",
+         "回款金额": 10000, "回款日期": pd.Timestamp("2024-02-10")},
+    ])
+    # 主合同未录价；分项自己有价 → 用自身
+    prices = {"SUB-1": ContractPricing("SUB-1", 100, 90, 80)}
+    main_map = {"SUB-1": "MAIN-1"}
+
+    res = calc_profit_commission(d, p, prices, main_contract_map=main_map)
+    row = res.iloc[0]
+    assert row["系数来源"] == "自身"
+    assert row["主合同编号"] == "MAIN-1"
+    assert row["利润提成金额"] > 0
 
 
 def test_calc_payment_timeliness_fifo_matches():

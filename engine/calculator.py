@@ -196,6 +196,8 @@ def load_delivery_excel(path: str) -> pd.DataFrame:
             col_map[col] = "发货金额"
         elif "实际发货日期" in col or "发货日期" in col:
             col_map[col] = "发货日期"
+        elif "主合同编号" in col or "主合同号" in col:
+            col_map[col] = "主合同编号"
         elif "合同编号" in col or "合同号" in col:
             col_map[col] = "合同编号"
         elif any(k in col for k in (
@@ -212,6 +214,14 @@ def load_delivery_excel(path: str) -> pd.DataFrame:
     df["合同编号"] = df["合同编号"].astype("string").str.strip()
     df.loc[df["合同编号"].isin(["", "nan", "None"]) | df["合同编号"].isna(),
            "合同编号"] = "其他"
+
+    # 主合同编号：缺失时回落到合同编号自身（自己即主合同）
+    if "主合同编号" not in df.columns:
+        df["主合同编号"] = df["合同编号"]
+    else:
+        df["主合同编号"] = df["主合同编号"].astype("string").str.strip()
+        empty_main = df["主合同编号"].isin(["", "nan", "None"]) | df["主合同编号"].isna()
+        df.loc[empty_main, "主合同编号"] = df.loc[empty_main, "合同编号"]
 
     if "销售员" in df.columns:
         df = df[df["销售员"].notna() & (df["销售员"].astype(str).str.strip() != "")]
@@ -233,6 +243,8 @@ def load_payment_excel(path: str) -> pd.DataFrame:
             col_map[col] = "回款金额"
         elif "回款日期" in col or "收款日期" in col:
             col_map[col] = "回款日期"
+        elif "主合同编号" in col or "主合同号" in col:
+            col_map[col] = "主合同编号"
         elif "合同编号" in col or "合同号" in col:
             col_map[col] = "合同编号"
         elif "销售部门" in col:
@@ -258,6 +270,13 @@ def load_payment_excel(path: str) -> pd.DataFrame:
     df.loc[df["合同编号"].isin(["", "nan", "None"]) | df["合同编号"].isna(),
            "合同编号"] = "其他"
 
+    if "主合同编号" not in df.columns:
+        df["主合同编号"] = df["合同编号"]
+    else:
+        df["主合同编号"] = df["主合同编号"].astype("string").str.strip()
+        empty_main = df["主合同编号"].isin(["", "nan", "None"]) | df["主合同编号"].isna()
+        df.loc[empty_main, "主合同编号"] = df.loc[empty_main, "合同编号"]
+
     if "销售员" in df.columns:
         df = df[df["销售员"].notna() & (df["销售员"].astype(str).str.strip() != "")]
 
@@ -270,29 +289,57 @@ def load_payment_excel(path: str) -> pd.DataFrame:
 
 
 def load_contract_pricing_excel(path: str) -> dict[str, "ContractPricing"]:
+    """读取合同价格 Excel。
+
+    支持的列别名（模糊匹配，忽略空白和"（元）"等后缀）：
+      - 合同编号 / 合同号 / 项目号
+      - 指导价 / 基准价 / 目标价 / 标准价 / 参考价
+      - 合同价 / 合同总价 / 合同金额 / 销售价 / 成交价
+      - 成本价 / 成本 / 制造成本 / 采购价
+    """
     header_row = _detect_header_row(path)
     df = pd.read_excel(path, header=header_row)
     df.columns = [str(c).strip() for c in df.columns]
 
+    def _norm(s: str) -> str:
+        return (
+            str(s).replace(" ", "").replace("（元）", "").replace("(元)", "")
+            .replace("（", "").replace("）", "")
+        )
+
     pid_col = guide_col = contract_col = cost_col = None
     for col in df.columns:
-        cl = col.replace(" ", "")
-        if "合同编号" in cl or "合同号" in cl:
+        cl = _norm(col)
+        if pid_col is None and ("合同编号" in cl or "合同号" in cl or "项目号" in cl):
             pid_col = col
-        elif "指导价" in cl:
+        elif guide_col is None and any(k in cl for k in (
+            "指导价", "基准价", "目标价", "标准价", "参考价"
+        )):
             guide_col = col
-        elif "合同价" in cl or "合同总价" in cl:
+        elif contract_col is None and any(k in cl for k in (
+            "合同总价", "合同金额", "合同价", "销售价", "成交价"
+        )):
             contract_col = col
-        elif "成本价" in cl or "成本" in cl:
+        elif cost_col is None and any(k in cl for k in (
+            "成本价", "制造成本", "采购价", "成本"
+        )):
             cost_col = col
 
     if pid_col is None:
-        raise ValueError("未找到「合同编号/合同号」列")
+        raise ValueError(
+            "未找到「合同编号/合同号/项目号」列。实际表头为："
+            f"{list(df.columns)}"
+        )
+    if guide_col is None and contract_col is None and cost_col is None:
+        raise ValueError(
+            "未识别到任何价格列（指导价 / 合同价 / 成本价）。实际表头为："
+            f"{list(df.columns)}"
+        )
 
     result: dict[str, ContractPricing] = {}
     for _, row in df.iterrows():
         pid = str(row[pid_col]).strip()
-        if not pid or pid == "nan":
+        if not pid or pid.lower() in ("nan", "none"):
             continue
 
         def _safe(c):
@@ -315,6 +362,79 @@ def load_contract_pricing_excel(path: str) -> dict[str, "ContractPricing"]:
     return result
 
 
+def load_contract_pricing_excel_with_meta(path: str) -> tuple[dict[str, "ContractPricing"], dict]:
+    """与 :func:`load_contract_pricing_excel` 相同，但额外返回诊断信息。
+
+    诊断 dict 含：
+      - columns: 原始识别出的表头列表
+      - matched: {pid_col, guide_col, contract_col, cost_col} 匹配到的真实列名
+      - raw_rows: Excel 总行数（不含空合同号）
+      - total: 去重后合同号数（== len(result)）
+      - priced: 三项价格中至少一项 > 0 的条目数
+      - zero_pids: 三项价格全部为 0 的合同号列表
+      - duplicate_pids: {合同号: 出现次数} —— 仅列出次数 > 1 的
+    """
+    header_row = _detect_header_row(path)
+    df = pd.read_excel(path, header=header_row)
+    df.columns = [str(c).strip() for c in df.columns]
+
+    result = load_contract_pricing_excel(path)
+    # 只要合同号存在，就视为"已录入一条价格记录"，无论数值为正/负/0。
+    priced = len(result)
+    zero_pids: list[str] = []
+
+    # 复用上面的识别逻辑来抓出命中列名（无侵入的再跑一次）
+    def _norm(s: str) -> str:
+        return (
+            str(s).replace(" ", "").replace("（元）", "").replace("(元)", "")
+            .replace("（", "").replace("）", "")
+        )
+    matched: dict[str, str | None] = {
+        "pid_col": None, "guide_col": None, "contract_col": None, "cost_col": None,
+    }
+    for col in df.columns:
+        cl = _norm(col)
+        if matched["pid_col"] is None and ("合同编号" in cl or "合同号" in cl or "项目号" in cl):
+            matched["pid_col"] = col
+        elif matched["guide_col"] is None and any(k in cl for k in (
+            "指导价", "基准价", "目标价", "标准价", "参考价"
+        )):
+            matched["guide_col"] = col
+        elif matched["contract_col"] is None and any(k in cl for k in (
+            "合同总价", "合同金额", "合同价", "销售价", "成交价"
+        )):
+            matched["contract_col"] = col
+        elif matched["cost_col"] is None and any(k in cl for k in (
+            "成本价", "制造成本", "采购价", "成本"
+        )):
+            matched["cost_col"] = col
+
+    raw_rows = 0
+    dup_counts: dict[str, int] = {}
+    pid_col = matched.get("pid_col")
+    if pid_col is not None and pid_col in df.columns:
+        for v in df[pid_col]:
+            if pd.isna(v):
+                continue
+            pid = str(v).strip()
+            if not pid or pid.lower() in ("nan", "none"):
+                continue
+            raw_rows += 1
+            dup_counts[pid] = dup_counts.get(pid, 0) + 1
+    duplicate_pids = {pid: n for pid, n in dup_counts.items() if n > 1}
+
+    meta = {
+        "columns": list(df.columns),
+        "matched": matched,
+        "raw_rows": raw_rows,
+        "total": len(result),
+        "priced": priced,
+        "zero_pids": zero_pids,
+        "duplicate_pids": duplicate_pids,
+    }
+    return result, meta
+
+
 def extract_project_list(delivery_df: pd.DataFrame | None,
                          payment_df: pd.DataFrame | None) -> list[str]:
     projects = set()
@@ -323,6 +443,59 @@ def extract_project_list(delivery_df: pd.DataFrame | None,
     if payment_df is not None and "合同编号" in payment_df.columns:
         projects.update(payment_df["合同编号"].dropna().astype(str).unique())
     return sorted(projects)
+
+
+def build_main_contract_map(
+    delivery_df: pd.DataFrame | None,
+    payment_df: pd.DataFrame | None,
+) -> dict[str, str]:
+    """构建 分项合同 → 主合同 的映射。
+
+    规则：
+    - 任一数据源（交货 / 回款）有 (合同编号, 主合同编号) 行时建立映射；
+    - 同一分项出现多个不同的主合同时，取出现次数最多者（通常只会是一个）；
+    - 主合同编号缺失 / 为空时视为自身即主合同，不会产生多余映射；
+    - 返回值一定覆盖所有出现过的合同编号，若无主合同则 main == self。
+    """
+    pair_counts: dict[tuple[str, str], int] = {}
+
+    def _collect(df: pd.DataFrame | None):
+        if df is None or df.empty:
+            return
+        if "合同编号" not in df.columns:
+            return
+        if "主合同编号" in df.columns:
+            pairs = (
+                df[["合同编号", "主合同编号"]]
+                .astype("string")
+                .fillna("")
+            )
+        else:
+            pairs = pd.DataFrame({
+                "合同编号": df["合同编号"].astype("string").fillna(""),
+                "主合同编号": df["合同编号"].astype("string").fillna(""),
+            })
+        for _, row in pairs.iterrows():
+            sub = str(row["合同编号"]).strip()
+            main = str(row["主合同编号"]).strip()
+            if not sub or sub.lower() in ("nan", "none"):
+                continue
+            if not main or main.lower() in ("nan", "none"):
+                main = sub
+            pair_counts[(sub, main)] = pair_counts.get((sub, main), 0) + 1
+
+    _collect(delivery_df)
+    _collect(payment_df)
+
+    by_sub: dict[str, dict[str, int]] = {}
+    for (sub, main), cnt in pair_counts.items():
+        by_sub.setdefault(sub, {})[main] = by_sub.setdefault(sub, {}).get(main, 0) + cnt
+
+    out: dict[str, str] = {}
+    for sub, counts in by_sub.items():
+        main = max(counts.items(), key=lambda kv: (kv[1], kv[0] != sub))[0]
+        out[sub] = main if main else sub
+    return out
 
 
 def invoice_units_by_contract(
@@ -734,11 +907,20 @@ def calc_profit_commission(delivery_df: pd.DataFrame,
                            payment_df: pd.DataFrame,
                            contract_prices: dict[str, ContractPricing],
                            base_rate_pct: float | None = None,
-                           k_max: float | None = None) -> pd.DataFrame:
+                           k_max: float | None = None,
+                           main_contract_map: dict[str, str] | None = None) -> pd.DataFrame:
+    """按合同计算利润提成。
+
+    ``main_contract_map``：分项合同 → 主合同的映射。若主合同已录入价格，则分项
+    合同沿用主合同的 K 系数 / 提成率（"归属" 主合同口径）；否则再回落到分项
+    自身的价格。为空或 None 时退化为旧逻辑（仅按合同号自身查价）。
+    """
     if base_rate_pct is None:
         base_rate_pct = DEFAULT_PROFIT_BASE_RATE
     if k_max is None:
         k_max = DEFAULT_PROFIT_K_MAX
+    if main_contract_map is None:
+        main_contract_map = {}
 
     dept_map = _build_salesperson_dept_map(delivery_df, payment_df)
 
@@ -758,16 +940,39 @@ def calc_profit_commission(delivery_df: pd.DataFrame,
 
     contracts = pd.merge(del_grp, pay_grp, on=["销售员", "合同编号"], how="outer").fillna(0)
 
+    def _resolve_pricing(pid: str) -> tuple[ContractPricing | None, str, str]:
+        """返回 (使用的定价, 主合同编号, 系数来源)。
+
+        系数来源：
+          - "自身"：用分项自己的价
+          - "主合同"：用主合同的价（分项自身未录入）
+          - "未录入"：均未录入
+        """
+        main_pid = str(main_contract_map.get(str(pid), pid))
+        main_pricing = contract_prices.get(main_pid)
+        self_pricing = contract_prices.get(str(pid))
+
+        # 以"是否存在记录"为准，不再看具体数值；数值的合法性由 calc_profit_k_and_rate 处理。
+        if main_pricing is not None and str(main_pid) != str(pid):
+            return main_pricing, main_pid, "主合同"
+        if self_pricing is not None:
+            return self_pricing, main_pid, "自身"
+        if main_pricing is not None:
+            return main_pricing, main_pid, "自身"
+        return None, main_pid, "未录入"
+
     rows = []
     for _, r in contracts.iterrows():
-        pid = r["合同编号"]
-        pricing = contract_prices.get(pid)
+        pid = str(r["合同编号"])
         d_amt = float(r["合同发货额"])
         p_amt = float(r["合同回款额"])
         status = contract_status(d_amt, p_amt)
 
+        pricing, main_pid, src = _resolve_pricing(pid)
+
         base = {
             "合同编号": pid,
+            "主合同编号": main_pid,
             "销售员": r["销售员"],
             "销售部门": dept_map.get(r["销售员"], ""),
             "合同发货额": round(d_amt, 2),
@@ -775,10 +980,12 @@ def calc_profit_commission(delivery_df: pd.DataFrame,
             "状态": status,
         }
 
-        if pricing and pricing.guide_price > 0:
+        if pricing is not None:
             k, rate, cat = calc_profit_k_and_rate(
                 pricing.guide_price, pricing.contract_price,
                 pricing.cost_price, base_rate_pct, k_max)
+            if src == "主合同":
+                cat = f"{cat}（沿用主合同{main_pid}）"
             base.update({
                 "指导价": pricing.guide_price,
                 "合同价": pricing.contract_price,
@@ -786,6 +993,7 @@ def calc_profit_commission(delivery_df: pd.DataFrame,
                 "K系数": round(k, 4),
                 "利润提成率": f"{rate*100:.4f}%",
                 "利润分类": cat,
+                "系数来源": src,
                 "利润提成金额": round(p_amt * rate, 2),
             })
         else:
@@ -796,6 +1004,7 @@ def calc_profit_commission(delivery_df: pd.DataFrame,
                 "K系数": np.nan,
                 "利润提成率": "未设定价格",
                 "利润分类": "未设定价格",
+                "系数来源": "未录入",
                 "利润提成金额": 0.0,
             })
         rows.append(base)
@@ -804,7 +1013,12 @@ def calc_profit_commission(delivery_df: pd.DataFrame,
         return pd.DataFrame()
     df = pd.DataFrame(rows)
     df["_sort"] = df["合同编号"].apply(lambda x: (1 if str(x) == "其他" else 0, str(x)))
-    return df.sort_values(["_sort", "销售员"]).drop(columns=["_sort"]).reset_index(drop=True)
+    df["_main_sort"] = df["主合同编号"].apply(lambda x: (1 if str(x) == "其他" else 0, str(x)))
+    return (
+        df.sort_values(["_main_sort", "_sort", "销售员"])
+        .drop(columns=["_sort", "_main_sort"])
+        .reset_index(drop=True)
+    )
 
 
 # ══════════════════════════════════════════════════════════════

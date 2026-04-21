@@ -9,7 +9,8 @@ from web._ui import fmt_money, meta_row, kpi_row
 from web._download import render_df_download_buttons, render_multi_download_buttons
 from web._table import dataframe_with_fulltext_panel
 from web._cache import (
-    get_invoice_units_by_contract_sp, get_contract_overview, session_cache,
+    get_invoice_units_by_contract_sp, get_contract_overview,
+    get_main_contract_map, session_cache,
 )
 
 
@@ -101,6 +102,7 @@ def _build_contract_breakdown_by_salesperson() -> dict[str, pd.DataFrame]:
     timeliness_df = st.session_state.get("timeliness_result")
 
     inv_sp_map = get_invoice_units_by_contract_sp()
+    main_map = get_main_contract_map()
 
     # 先构建 (销售员, 合同号) 的基础集合
     rows: dict[tuple[str, str], dict] = {}
@@ -137,19 +139,32 @@ def _build_contract_breakdown_by_salesperson() -> dict[str, pd.DataFrame]:
                 "利润提成率": r.get("利润提成率", ""),
                 "利润系数": float(r.get("K系数", 0) or 0) if pd.notna(r.get("K系数", None)) else 0.0,
                 "利润分类": r.get("利润分类", ""),
+                "系数来源": str(r.get("系数来源", "") or ""),
+                "主合同编号": str(r.get("主合同编号", "") or ""),
                 "状态": r.get("状态", ""),
             }
 
     tl_lookup: dict[tuple[str, str], dict] = {}
     if timeliness_df is not None and not timeliness_df.empty:
         for (sp, pid), grp in timeliness_df.groupby(["销售员", "合同编号"]):
-            pay = pd.to_numeric(grp.get("回款金额", 0), errors="coerce").fillna(0)
-            tl_amt = pd.to_numeric(grp.get("时效提成金额", 0), errors="coerce").fillna(0)
-            days = pd.to_numeric(grp.get("回款周期(天)", 0), errors="coerce").fillna(0)
-            pay_sum = float(pay.sum())
-            tl_sum = float(tl_amt.sum())
-            ratio = (tl_sum / pay_sum) if pay_sum > 1e-9 else 0.0
-            day_avg = float((days * pay).sum() / pay_sum) if pay_sum > 1e-9 else 0.0
+            pay_all = pd.to_numeric(grp.get("回款金额", 0), errors="coerce").fillna(0)
+            tl_amt_all = pd.to_numeric(grp.get("时效提成金额", 0), errors="coerce").fillna(0)
+            days_raw = pd.to_numeric(grp.get("回款周期(天)", 0), errors="coerce")
+            tl_sum = float(tl_amt_all.sum())
+
+            # 仅取匹配到发货的回款（回款周期非空）参与加权
+            # 超出发货额 / 无匹配发货 的行不应稀释该合同的时效系数与平均天数
+            matched_mask = days_raw.notna()
+            pay_matched = pay_all[matched_mask]
+            days_matched = days_raw[matched_mask].fillna(0)
+            matched_pay_sum = float(pay_matched.sum())
+            if matched_pay_sum > 1e-9:
+                ratio = tl_sum / matched_pay_sum
+                day_avg = float((days_matched * pay_matched).sum() / matched_pay_sum)
+            else:
+                ratio = 0.0
+                day_avg = 0.0
+
             tl_lookup[_key(sp, pid)] = {
                 "时效提成金额": tl_sum,
                 "时效系数": ratio,
@@ -175,7 +190,9 @@ def _build_contract_breakdown_by_salesperson() -> dict[str, pd.DataFrame]:
         tl_days = float(tl_info.get("时效天数", 0.0))
         status = prof.get("状态") or _status_of(d_amt, p_amt)
 
+        main_pid = prof.get("主合同编号") or main_map.get(pid, pid)
         by_sp.setdefault(sp, []).append({
+            "主合同编号": main_pid,
             "合同编号": pid,
             "开票单位": inv_sp_map.get((pid, sp), ""),
             "合同发货额": d_amt,
@@ -185,6 +202,7 @@ def _build_contract_breakdown_by_salesperson() -> dict[str, pd.DataFrame]:
             "利润系数": round(float(prof.get("利润系数", 0.0)), 4),
             "利润提成率": prof.get("利润提成率", "") or "",
             "利润系数(提成率)": f"{profit_ratio * 100:.2f}%",
+            "系数来源": prof.get("系数来源", "") or "",
             "利润提成": profit_amt,
             "时效天数": round(tl_days, 1),
             "时效系数": f"{tl_ratio * 100:.2f}%",
@@ -196,8 +214,22 @@ def _build_contract_breakdown_by_salesperson() -> dict[str, pd.DataFrame]:
     out: dict[str, pd.DataFrame] = {}
     for sp, items in by_sp.items():
         df = pd.DataFrame(items)
-        df["_sort"] = df["合同编号"].apply(lambda x: (1 if str(x) == "其他" else 0, str(x)))
-        df = df.sort_values(["_sort", "合同编号"]).drop(columns=["_sort"]).reset_index(drop=True)
+        df["_main_sort"] = df["主合同编号"].apply(
+            lambda x: (1 if str(x) == "其他" else 0, str(x))
+        )
+        df["_sub_sort"] = df["合同编号"].apply(
+            lambda x: (1 if str(x) == "其他" else 0, str(x))
+        )
+        # 主合同自身排最前；同主合同内部再按分项合同号升序
+        df["_is_main"] = (df["主合同编号"] == df["合同编号"]).astype(int)
+        df = (
+            df.sort_values(
+                ["_main_sort", "_is_main", "_sub_sort"],
+                ascending=[True, False, True],
+            )
+            .drop(columns=["_main_sort", "_sub_sort", "_is_main"])
+            .reset_index(drop=True)
+        )
         out[sp] = df
     return out
 
@@ -217,6 +249,7 @@ def _build_contract_breakdown_flat(total_df: pd.DataFrame) -> pd.DataFrame:
             rows.append({
                 "销售员": sp,
                 "销售部门": dept_map.get(sp, ""),
+                "主合同编号": r.get("主合同编号", r["合同编号"]),
                 "合同编号": r["合同编号"],
                 "开票单位": r["开票单位"],
                 "合同发货额": r["合同发货额"],
@@ -226,6 +259,7 @@ def _build_contract_breakdown_flat(total_df: pd.DataFrame) -> pd.DataFrame:
                 "利润系数": r.get("利润系数", 0.0),
                 "利润提成率": r.get("利润提成率", ""),
                 "利润系数(提成率)": r.get("利润系数(提成率)", ""),
+                "系数来源": r.get("系数来源", ""),
                 "利润提成": r["利润提成"],
                 "时效天数": r.get("时效天数", 0.0),
                 "时效系数": r.get("时效系数", ""),
@@ -236,10 +270,21 @@ def _build_contract_breakdown_flat(total_df: pd.DataFrame) -> pd.DataFrame:
     if not rows:
         return pd.DataFrame()
     flat = pd.DataFrame(rows)
-    flat["_sort"] = flat["合同编号"].apply(
+    flat["_main_sort"] = flat["主合同编号"].apply(
         lambda x: (1 if str(x) == "其他" else 0, str(x))
     )
-    flat = flat.sort_values(["销售员", "_sort", "合同编号"]).drop(columns=["_sort"]).reset_index(drop=True)
+    flat["_sub_sort"] = flat["合同编号"].apply(
+        lambda x: (1 if str(x) == "其他" else 0, str(x))
+    )
+    flat["_is_main"] = (flat["主合同编号"] == flat["合同编号"]).astype(int)
+    flat = (
+        flat.sort_values(
+            ["销售员", "_main_sort", "_is_main", "_sub_sort"],
+            ascending=[True, True, False, True],
+        )
+        .drop(columns=["_main_sort", "_sub_sort", "_is_main"])
+        .reset_index(drop=True)
+    )
     return flat
 
 
@@ -251,9 +296,9 @@ def _build_export_template_df(total_df: pd.DataFrame) -> pd.DataFrame:
         return pd.DataFrame(columns=[
             "销售员", "销售部门", "总销售金额", "回款金额",
             "完成额度提成(元)", "完成比系数",
-            "利润提成(元)", "利润系数",
+            "利润提成(元)", "利润系数", "系数来源",
             "回款时效提成(元)", "时效（天数）", "时效系数",
-            "总提成（元）", "合同号", "客户名",
+            "总提成（元）", "主合同号", "合同号", "客户名",
         ])
 
     # 销售员 -> 部门/完成额度系数（来自 quota_result）
@@ -269,14 +314,18 @@ def _build_export_template_df(total_df: pd.DataFrame) -> pd.DataFrame:
             quota_ratio_map[sp] = _parse_pct_to_ratio(r.get("提成比例", 0))
 
     # 时效天数来自 timeliness_result 的合同级加权平均
+    # 仅统计匹配到发货的回款（回款周期(天) 非空）；超发/未匹配不参与加权
     tl_df = st.session_state.get("timeliness_result")
     tl_days_map: dict[tuple[str, str], float] = {}
     if tl_df is not None and not tl_df.empty:
         for (sp, pid), grp in tl_df.groupby(["销售员", "合同编号"]):
             pay = pd.to_numeric(grp.get("回款金额", 0), errors="coerce").fillna(0)
-            days = pd.to_numeric(grp.get("回款周期(天)", 0), errors="coerce").fillna(0)
-            pay_sum = float(pay.sum())
-            day_avg = float((days * pay).sum() / pay_sum) if pay_sum > 1e-9 else 0.0
+            days_raw = pd.to_numeric(grp.get("回款周期(天)", 0), errors="coerce")
+            mask = days_raw.notna()
+            pay_m = pay[mask]
+            days_m = days_raw[mask].fillna(0)
+            pay_sum = float(pay_m.sum())
+            day_avg = float((days_m * pay_m).sum() / pay_sum) if pay_sum > 1e-9 else 0.0
             tl_days_map[(str(sp), str(pid))] = day_avg
 
     rows = []
@@ -303,10 +352,12 @@ def _build_export_template_df(total_df: pd.DataFrame) -> pd.DataFrame:
             "完成比系数": f"{quota_ratio * 100:.2f}%",
             "利润提成(元)": round(profit_amt, 2),
             "利润系数": r.get("利润系数", 0),
+            "系数来源": r.get("系数来源", "") or "",
             "回款时效提成(元)": round(tl_amt, 2),
             "时效（天数）": round(tl_days, 1),
             "时效系数": r.get("时效系数", ""),
             "总提成（元）": round(total_amt, 2),
+            "主合同号": str(r.get("主合同编号", pid) or pid),
             "合同号": pid,
             "客户名": str(r.get("开票单位", "") or ""),
         })
@@ -316,9 +367,9 @@ def _build_export_template_df(total_df: pd.DataFrame) -> pd.DataFrame:
     cols = [
         "销售员", "销售部门", "总销售金额", "回款金额",
         "完成额度提成(元)", "完成比系数",
-        "利润提成(元)", "利润系数",
+        "利润提成(元)", "利润系数", "系数来源",
         "回款时效提成(元)", "时效（天数）", "时效系数",
-        "总提成（元）", "合同号", "客户名",
+        "总提成（元）", "主合同号", "合同号", "客户名",
     ]
     out = out[cols]
     return out
@@ -449,9 +500,11 @@ def render_total(username: str):
                         st.caption("（未匹配到合同明细，请确认已完成利润/时效提成计算）")
                     else:
                         display_cols = [
-                            "合同编号", "开票单位", "合同发货额", "合同回款额",
+                            "主合同编号", "合同编号", "开票单位",
+                            "合同发货额", "合同回款额",
                             "完成额度系数", "完成额度提成",
-                            "利润系数", "利润提成率", "利润系数(提成率)", "利润提成",
+                            "利润系数", "利润提成率", "利润系数(提成率)",
+                            "系数来源", "利润提成",
                             "时效天数", "时效系数", "回款时效提成",
                             "合同小计", "状态",
                         ]
@@ -462,6 +515,14 @@ def render_total(username: str):
                             fulltext_cols=["开票单位"],
                             height=min(400, 45 + len(show_df) * 36),
                             column_config={
+                                "主合同编号": st.column_config.TextColumn(
+                                    "主合同编号",
+                                    help="分项合同所属的主合同号；无主合同时与合同编号相同。",
+                                ),
+                                "系数来源": st.column_config.TextColumn(
+                                    "系数来源",
+                                    help="本行 K 系数的来源：主合同 / 自身 / 未录入。",
+                                ),
                                 "开票单位": st.column_config.TextColumn(
                                     "开票单位",
                                     help="保留全称；显示区域不足时可点击单元格查看完整文本。",

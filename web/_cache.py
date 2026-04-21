@@ -170,6 +170,20 @@ def get_project_list():
     return _compute()
 
 
+def get_main_contract_map() -> dict[str, str]:
+    """{分项合同编号 -> 主合同编号}，主合同缺失时 main == self。"""
+    from engine.calculator import build_main_contract_map
+
+    @session_cache("main_contract_map", scope="data")
+    def _compute():
+        return build_main_contract_map(
+            st.session_state.get("delivery_df"),
+            st.session_state.get("payment_df"),
+        )
+
+    return _compute()
+
+
 def get_salesperson_dept_map() -> dict[str, str]:
     """{销售员 -> 销售部门}，按当前 delivery/payment 数据缓存。"""
     from engine.calculator import build_salesperson_dept_map
