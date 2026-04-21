@@ -183,8 +183,8 @@ def _render_price_groups(price_df: pd.DataFrame) -> None:
             )
         with fc2:
             only_with_subs = st.checkbox(
-                "仅显示含分项的主合同", value=False, key="price_group_only_subs",
-                help="勾选后只展开真正有下属分项合同的主合同组；独立合同会被隐藏。",
+                "隐藏独立合同", value=False, key="price_group_only_subs",
+                help="勾选后只显示主合同+分项的层级组；独立合同列表会被隐藏。",
             )
         with fc3:
             expand_all = st.checkbox(
@@ -197,55 +197,62 @@ def _render_price_groups(price_df: pd.DataFrame) -> None:
         for main_pid, grp in df.groupby("主合同编号"):
             grouped[str(main_pid)] = grp
 
-        # "其他" 放最后，其他按字母序
+        # 区分"真·主合同组"（组内除主合同自身外还有其他分项）和"独立合同"
+        real_main_pids: list[str] = []
+        standalone_pids: list[str] = []
+        for mpid, g in grouped.items():
+            has_sub = (g["合同编号"] != g["主合同编号"]).any()
+            if has_sub:
+                real_main_pids.append(mpid)
+            else:
+                standalone_pids.append(mpid)
+
+        # "其他" 放最后，其余按字母序
         def _order_key(mpid: str):
             return (1 if mpid == "其他" else 0, mpid)
 
-        main_pids = sorted(grouped.keys(), key=_order_key)
+        real_main_pids.sort(key=_order_key)
+        standalone_pids.sort(key=_order_key)
 
-        if kw and kw.strip():
-            k = kw.strip().lower()
-            def _match(mpid: str) -> bool:
-                sub = grouped[mpid]
-                if k in mpid.lower():
+        def _match(mpid: str) -> bool:
+            sub = grouped[mpid]
+            k = kw.strip().lower() if kw else ""
+            if not k:
+                return True
+            if k in mpid.lower():
+                return True
+            for inv in sub["开票单位"].astype(str).fillna(""):
+                if k in inv.lower():
                     return True
-                for inv in sub["开票单位"].astype(str).fillna(""):
-                    if k in inv.lower():
-                        return True
-                for p in sub["合同编号"].astype(str):
-                    if k in p.lower():
-                        return True
-                return False
-            main_pids = [m for m in main_pids if _match(m)]
+            for p in sub["合同编号"].astype(str):
+                if k in p.lower():
+                    return True
+            return False
 
-        if only_with_subs:
-            main_pids = [m for m in main_pids if len(grouped[m]) > 1]
+        real_main_pids = [m for m in real_main_pids if _match(m)]
+        if not only_with_subs:
+            standalone_pids = [m for m in standalone_pids if _match(m)]
+        else:
+            standalone_pids = []
 
-        total_mains = len(grouped)
-        shown_mains = len(main_pids)
+        total_mains = len(real_main_pids)
         total_subs = sum(
-            int((g["合同编号"] != g["主合同编号"]).sum()) for g in grouped.values()
+            int((grouped[m]["合同编号"] != grouped[m]["主合同编号"]).sum())
+            for m in real_main_pids
         )
         st.caption(
-            f"共 {total_mains} 个主合同（含 {total_subs} 个分项）；"
-            f"当前显示 {shown_mains} 个。"
+            f"主合同层级 {total_mains} 组（含 {total_subs} 个分项）；"
+            f"独立合同 {len(standalone_pids)} 条。"
         )
 
-        if not main_pids:
-            st.info("没有匹配的主合同。")
+        if not real_main_pids and not standalone_pids:
+            st.info("没有匹配的合同。")
             return
 
-        # 只渲染前 N 个，避免过多 expander 让页面卡顿
         MAX_GROUPS = 200
-        truncated = False
-        if len(main_pids) > MAX_GROUPS:
-            truncated = True
-            main_pids = main_pids[:MAX_GROUPS]
 
-        for mpid in main_pids:
+        def _render_main_group(mpid: str) -> None:
             sub = grouped[mpid].copy()
-
-            # 排序：主合同行在最前，然后分项按合同号
             sub["_is_main"] = (sub["主合同编号"] == sub["合同编号"]).astype(int)
             sub = sub.sort_values(
                 ["_is_main", "合同编号"], ascending=[False, True]
@@ -255,7 +262,6 @@ def _render_price_groups(price_df: pd.DataFrame) -> None:
             n_subs = int((sub["合同编号"] != sub["主合同编号"]).sum())
             n_priced = int((sub["录价状态"] == "已录价").sum())
 
-            # 聚合本组所有行的开票单位 → 去重 units 列表
             unit_set: list[str] = []
             seen: set[str] = set()
             for v in sub["开票单位"].astype(str):
@@ -263,7 +269,6 @@ def _render_price_groups(price_df: pd.DataFrame) -> None:
                     if u not in seen:
                         seen.add(u)
                         unit_set.append(u)
-
             inv_short = truncate_units_text(" / ".join(unit_set), max_n=1, max_chars=22)
 
             title_segs = [str(mpid)]
@@ -274,18 +279,16 @@ def _render_price_groups(price_df: pd.DataFrame) -> None:
             header = "　·　".join(title_segs)
 
             with st.expander(header, expanded=expand_all):
-                metas: list[tuple[str, str]] = [
+                st.html(meta_row([
                     ("主合同编号", str(mpid)),
                     ("分项数", f"{n_subs}"),
                     ("录价状态", f"{n_priced} / {n_total}"),
-                ]
-                st.html(meta_row(metas))
+                ]))
 
                 if unit_set:
                     st.html(section_title(f"开票单位（{len(unit_set)}）"))
                     st.html(unit_pills(unit_set))
 
-                # 主合同价格概览（若主合同本身已录价）
                 main_row = sub[sub["合同编号"] == mpid]
                 if not main_row.empty:
                     r0 = main_row.iloc[0]
@@ -301,11 +304,10 @@ def _render_price_groups(price_df: pd.DataFrame) -> None:
                         ]))
 
                 st.html(section_title("合同明细"))
-                show_cols = [
+                show_cols = [c for c in [
                     "合同编号", "指导价", "合同价", "成本价",
                     "系数来源", "录价状态",
-                ]
-                show_cols = [c for c in show_cols if c in sub.columns]
+                ] if c in sub.columns]
                 st.dataframe(
                     sub[show_cols],
                     width="stretch",
@@ -320,10 +322,45 @@ def _render_price_groups(price_df: pd.DataFrame) -> None:
                     },
                 )
 
-        if truncated:
-            st.warning(
-                f"结果较多，仅展示前 {MAX_GROUPS} 个主合同。请用上方搜索框缩小范围。"
+        if real_main_pids:
+            st.html(section_title(f"主合同 · 分项层级（{len(real_main_pids)} 组）"))
+            truncated = len(real_main_pids) > MAX_GROUPS
+            for mpid in real_main_pids[:MAX_GROUPS]:
+                _render_main_group(mpid)
+            if truncated:
+                st.warning(
+                    f"结果较多，仅展示前 {MAX_GROUPS} 个主合同。请用上方搜索框缩小范围。"
+                )
+
+        if standalone_pids:
+            st.html(section_title(f"独立合同（{len(standalone_pids)} 条，无主/分关系）"))
+            # 独立合同用一张扁平表展示即可，不用 expander，避免堆一大堆折叠框。
+            rows_df = pd.concat(
+                [grouped[m] for m in standalone_pids[:max(MAX_GROUPS * 5, 1000)]],
+                ignore_index=True,
             )
+            show_cols = [c for c in [
+                "合同编号", "开票单位", "指导价", "合同价", "成本价",
+                "系数来源", "录价状态",
+            ] if c in rows_df.columns]
+            st.dataframe(
+                rows_df[show_cols],
+                width="stretch",
+                hide_index=True,
+                height=min(480, 45 + len(rows_df) * 36),
+                column_config={
+                    "开票单位": st.column_config.TextColumn("开票单位"),
+                    "指导价": st.column_config.NumberColumn(format="%.2f"),
+                    "合同价": st.column_config.NumberColumn(format="%.2f"),
+                    "成本价": st.column_config.NumberColumn(format="%.2f"),
+                    "系数来源": st.column_config.TextColumn("系数来源"),
+                    "录价状态": st.column_config.TextColumn("录价状态"),
+                },
+            )
+            if len(standalone_pids) > max(MAX_GROUPS * 5, 1000):
+                st.warning(
+                    f"独立合同过多，仅展示前 {max(MAX_GROUPS * 5, 1000)} 条。请使用搜索缩小范围。"
+                )
 
 
 def render_profit(username: str):
@@ -388,12 +425,17 @@ def render_profit(username: str):
                     raw_rows = meta.get("raw_rows", 0)
                     total = meta.get("total", 0)
                     dup_pids = meta.get("duplicate_pids", {}) or {}
+                    split_rows = meta.get("split_rows", 0)
 
                     st.success(f"已导入 {total} 条合同价格")
 
                     with st.expander("导入详情", expanded=False):
+                        split_note = (
+                            f"；其中 {split_rows} 行包含多个合同号已自动拆分"
+                            if split_rows else ""
+                        )
                         st.caption(
-                            f"Excel 有效行 {raw_rows}；去重后 {total}；0 与负数均计入。"
+                            f"Excel 合同号条目 {raw_rows}；去重后 {total}{split_note}。"
                         )
                         st.caption(
                             f"识别列　合同号：`{matched.get('pid_col') or '未识别'}`"
@@ -683,6 +725,11 @@ def render_profit(username: str):
                 "开票单位",
                 [inv_sp_map.get(k) or inv_map.get(k[0], "") for k in keys],
             )
+
+        # 主合同编号若与自身相同（独立合同，没有真实父合同），展示为空白。
+        if "主合同编号" in display_df.columns and "合同编号" in display_df.columns:
+            same = display_df["主合同编号"].astype(str) == display_df["合同编号"].astype(str)
+            display_df.loc[same, "主合同编号"] = ""
 
         with st.container(border=True):
             st.subheader("计算结果")

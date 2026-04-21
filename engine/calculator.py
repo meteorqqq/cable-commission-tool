@@ -337,9 +337,19 @@ def load_contract_pricing_excel(path: str) -> dict[str, "ContractPricing"]:
         )
 
     result: dict[str, ContractPricing] = {}
+    # 一格里可能写了多个合同号（如 "RYDB260420007、RYDB260420008"），支持
+    # 中/英文顿号、逗号、斜杠、分号、竖线、换行、多空格等常见分隔符。
+    _split_re = re.compile(r"[、,，/;；|\n\r\t]+| {2,}")
+
+    def _split_pids(raw: object) -> list[str]:
+        if raw is None or pd.isna(raw):
+            return []
+        parts = [p.strip() for p in _split_re.split(str(raw))]
+        return [p for p in parts if p and p.lower() not in ("nan", "none")]
+
     for _, row in df.iterrows():
-        pid = str(row[pid_col]).strip()
-        if not pid or pid.lower() in ("nan", "none"):
+        pids = _split_pids(row[pid_col])
+        if not pids:
             continue
 
         def _safe(c):
@@ -353,12 +363,16 @@ def load_contract_pricing_excel(path: str) -> dict[str, "ContractPricing"]:
             except (ValueError, TypeError):
                 return 0.0
 
-        result[pid] = ContractPricing(
-            project_id=pid,
-            guide_price=_safe(guide_col),
-            contract_price=_safe(contract_col),
-            cost_price=_safe(cost_col),
-        )
+        gp_v = _safe(guide_col)
+        cp_v = _safe(contract_col)
+        cos_v = _safe(cost_col)
+        for pid in pids:
+            result[pid] = ContractPricing(
+                project_id=pid,
+                guide_price=gp_v,
+                contract_price=cp_v,
+                cost_price=cos_v,
+            )
     return result
 
 
@@ -411,16 +425,22 @@ def load_contract_pricing_excel_with_meta(path: str) -> tuple[dict[str, "Contrac
 
     raw_rows = 0
     dup_counts: dict[str, int] = {}
+    split_rows = 0  # 发生"一格多号"拆分的 Excel 行数
     pid_col = matched.get("pid_col")
+    _split_re = re.compile(r"[、,，/;；|\n\r\t]+| {2,}")
     if pid_col is not None and pid_col in df.columns:
         for v in df[pid_col]:
             if pd.isna(v):
                 continue
-            pid = str(v).strip()
-            if not pid or pid.lower() in ("nan", "none"):
+            parts = [p.strip() for p in _split_re.split(str(v))]
+            parts = [p for p in parts if p and p.lower() not in ("nan", "none")]
+            if not parts:
                 continue
-            raw_rows += 1
-            dup_counts[pid] = dup_counts.get(pid, 0) + 1
+            if len(parts) > 1:
+                split_rows += 1
+            for pid in parts:
+                raw_rows += 1
+                dup_counts[pid] = dup_counts.get(pid, 0) + 1
     duplicate_pids = {pid: n for pid, n in dup_counts.items() if n > 1}
 
     meta = {
@@ -431,6 +451,7 @@ def load_contract_pricing_excel_with_meta(path: str) -> tuple[dict[str, "Contrac
         "priced": priced,
         "zero_pids": zero_pids,
         "duplicate_pids": duplicate_pids,
+        "split_rows": split_rows,
     }
     return result, meta
 

@@ -20,6 +20,7 @@ from engine.calculator import (
     calc_payment_timeliness,
     build_salesperson_dept_map,
     build_main_contract_map,
+    load_contract_pricing_excel,
     ContractPricing,
 )
 
@@ -254,6 +255,35 @@ def test_calc_profit_commission_falls_back_to_self_when_parent_missing():
     assert row["系数来源"] == "自身"
     assert row["主合同编号"] == "MAIN-1"
     assert row["利润提成金额"] > 0
+
+
+def test_load_contract_pricing_excel_splits_multi_pid_cell(tmp_path):
+    """合同编号一格里有多个号（顿号/逗号/斜杠/分号/换行）应拆成多条。"""
+    df = pd.DataFrame([
+        {"合同编号": "RYDB260420007、RYDB260420008",
+         "指导价": 125412.9129, "合同价": 126679.71, "成本价": 124779.5144},
+        {"合同编号": "RYDB260430001, RYDB260430002 / RYDB260430003",
+         "指导价": 100, "合同价": 110, "成本价": 80},
+        {"合同编号": "RYDB260440009;RYDB260440010\nRYDB260440011",
+         "指导价": 50, "合同价": 55, "成本价": 40},
+        {"合同编号": "RYDB260450001", "指导价": 1, "合同价": 1, "成本价": 1},
+    ])
+    path = tmp_path / "prices.xlsx"
+    df.to_excel(path, index=False)
+
+    result = load_contract_pricing_excel(str(path))
+
+    # 每一组都被拆开且共享同样的价格
+    assert result["RYDB260420007"].guide_price == pytest.approx(125412.9129)
+    assert result["RYDB260420008"].contract_price == pytest.approx(126679.71)
+    assert result["RYDB260430002"].cost_price == pytest.approx(80)
+    assert result["RYDB260430003"].guide_price == 100
+    assert result["RYDB260440009"].guide_price == 50
+    assert result["RYDB260440010"].guide_price == 50
+    assert result["RYDB260440011"].guide_price == 50
+    assert result["RYDB260450001"].guide_price == 1
+    # 2 + 3 + 3 + 1 = 9
+    assert len(result) == 9
 
 
 def test_calc_payment_timeliness_fifo_matches():
