@@ -12,7 +12,11 @@ from web._ui import (
     fmt_money, split_units, truncate_units_text,
     status_badge, unit_pills, kpi_row, meta_row, section_title,
 )
-from web._download import render_df_download_buttons
+from web._download import (
+    render_df_download_buttons,
+    dataframes_to_excel_bytes,
+    EXCEL_MIME,
+)
 from web._table import dataframe_with_fulltext_panel
 from web._cache import (
     get_invoice_units_by_contract, get_invoice_units_by_contract_sp,
@@ -84,6 +88,142 @@ def _build_contract_summary(
         return df
     df["_sort"] = df["合同编号"].apply(lambda x: (1 if x == "其他" else 0, x))
     return df.sort_values(["_sort", "销售员"]).drop(columns=["_sort"]).reset_index(drop=True)
+
+
+def _build_sp_export_sheets(
+    sp: str,
+    summary_df: pd.DataFrame,
+    timeliness_df: pd.DataFrame | None,
+    delivery_df: pd.DataFrame | None,
+    payment_df: pd.DataFrame | None,
+) -> dict[str, pd.DataFrame]:
+    """为单个销售员装配多 sheet 导出数据。"""
+    sheets: dict[str, pd.DataFrame] = {}
+
+    sum_sub = summary_df[summary_df["销售员"].astype(str) == str(sp)].copy()
+    sheets["合同汇总"] = sum_sub.reset_index(drop=True)
+
+    pids = set(sum_sub["合同编号"].astype(str).tolist())
+
+    def _filter(df: pd.DataFrame | None) -> pd.DataFrame:
+        if df is None or df.empty:
+            return pd.DataFrame()
+        sub = df.copy()
+        if "销售员" in sub.columns:
+            sub = sub[sub["销售员"].astype(str) == str(sp)]
+        elif "合同编号" in sub.columns:
+            sub = sub[sub["合同编号"].astype(str).isin(pids)]
+        return sub.reset_index(drop=True)
+
+    del_cols_pref = [
+        "发货日期", "合同编号", "销售员", "销售部门",
+        "发货金额", "订货单位", "开票单位",
+    ]
+    pay_cols_pref = [
+        "回款日期", "合同编号", "销售员", "销售部门",
+        "回款金额", "核销金额", "开票单位", "订货单位",
+    ]
+    tl_cols_pref = [
+        "合同编号", "销售员", "销售部门", "回款日期", "回款金额",
+        "匹配发货日期", "回款周期(天)", "时效提成比例", "时效提成金额",
+    ]
+
+    def _reorder(df: pd.DataFrame, pref: list[str]) -> pd.DataFrame:
+        if df.empty:
+            return df
+        cols = [c for c in pref if c in df.columns] + \
+               [c for c in df.columns if c not in pref]
+        return df[cols]
+
+    sheets["发货明细"] = _reorder(_filter(delivery_df), del_cols_pref)
+    sheets["回款明细"] = _reorder(_filter(payment_df), pay_cols_pref)
+    sheets["时效匹配明细"] = _reorder(_filter(timeliness_df), tl_cols_pref)
+    return sheets
+
+
+def _build_and_offer_per_sp_download(
+    *,
+    summary_df: pd.DataFrame,
+    timeliness_df: pd.DataFrame | None,
+    delivery_df: pd.DataFrame | None,
+    payment_df: pd.DataFrame | None,
+    picked_sps: list[str],
+) -> None:
+    """渲染"按销售员导出"的按钮：
+    - 未选销售员：导出整张合并表（全部销售员）
+    - 只选 1 位：导出该销售员的多 sheet 单文件
+    - 选 ≥2 位：导出一个 ZIP，内含每位销售员一份 Excel
+    """
+    import io
+    import zipfile
+
+    if summary_df.empty:
+        st.caption("暂无可导出数据。")
+        return
+
+    if not picked_sps:
+        sp_options = sorted(
+            v for v in summary_df["销售员"].dropna().astype(str).unique()
+            if v and v.lower() not in ("nan", "none")
+        )
+        merged: dict[str, pd.DataFrame] = {}
+        for sp in sp_options:
+            sheets = _build_sp_export_sheets(
+                sp, summary_df, timeliness_df, delivery_df, payment_df
+            )
+            for name, sub in sheets.items():
+                prev = merged.get(name)
+                if prev is None or prev.empty:
+                    merged[name] = sub
+                elif not sub.empty:
+                    merged[name] = pd.concat([prev, sub], ignore_index=True)
+        excel_bytes = dataframes_to_excel_bytes(merged)
+        st.download_button(
+            "下载 Excel（全部销售员）",
+            excel_bytes,
+            "回款时效提成_全部销售员.xlsx",
+            EXCEL_MIME,
+            key="payment_export_all_xlsx",
+            use_container_width=True,
+        )
+        return
+
+    if len(picked_sps) == 1:
+        sp = picked_sps[0]
+        sheets = _build_sp_export_sheets(
+            sp, summary_df, timeliness_df, delivery_df, payment_df
+        )
+        excel_bytes = dataframes_to_excel_bytes(sheets)
+        safe = str(sp).replace("/", "_").replace("\\", "_")
+        st.download_button(
+            f"下载 Excel（{sp}）",
+            excel_bytes,
+            f"回款时效提成_{safe}.xlsx",
+            EXCEL_MIME,
+            key="payment_export_single_xlsx",
+            use_container_width=True,
+        )
+        return
+
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, mode="w", compression=zipfile.ZIP_DEFLATED) as zf:
+        for sp in picked_sps:
+            sheets = _build_sp_export_sheets(
+                sp, summary_df, timeliness_df, delivery_df, payment_df
+            )
+            safe = str(sp).replace("/", "_").replace("\\", "_")
+            zf.writestr(
+                f"回款时效提成_{safe}.xlsx",
+                dataframes_to_excel_bytes(sheets),
+            )
+    st.download_button(
+        f"下载 Excel ZIP（{len(picked_sps)} 位销售员）",
+        buf.getvalue(),
+        "回款时效提成_按销售员.zip",
+        "application/zip",
+        key="payment_export_multi_zip",
+        use_container_width=True,
+    )
 
 
 def render_payment(username: str):
@@ -175,6 +315,32 @@ def render_payment(username: str):
             base_filename="合同汇总",
             sheet_name="合同汇总",
             key_prefix="payment_contract_summary",
+        )
+
+    st.markdown("")
+    with st.container(border=True):
+        st.subheader("按销售员导出")
+        st.caption(
+            "选择一位或多位销售员，导出的 Excel 包含该销售员名下的："
+            "合同汇总、发货明细、回款明细、时效匹配明细（多工作表）。"
+        )
+        sp_options = sorted(
+            v for v in summary_df["销售员"].dropna().astype(str).unique()
+            if v and v.lower() not in ("nan", "none")
+        )
+        picked_sps = st.multiselect(
+            "销售员",
+            options=sp_options,
+            default=[],
+            key="payment_export_by_sp",
+            placeholder="留空表示导出全部销售员（单文件）",
+        )
+        _build_and_offer_per_sp_download(
+            summary_df=summary_df,
+            timeliness_df=timeliness_df,
+            delivery_df=delivery_df,
+            payment_df=payment_df,
+            picked_sps=picked_sps,
         )
 
     st.markdown("")
