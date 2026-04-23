@@ -1085,7 +1085,7 @@ def calc_payment_timeliness(delivery_df: pd.DataFrame,
     pay_summary = pay_summary[["合同编号", "销售员", "销售部门",
                                 "回款月份", "回款笔数", "回款金额合计"]]
 
-    # ── FIFO 匹配 ──
+    # ── FIFO 匹配（支持退款：按 LIFO 冲销已匹配历史）──
     timeliness_rows = []
 
     for (salesperson, project), grp_pay in payment_df.groupby(["销售员", "合同编号"]):
@@ -1105,44 +1105,93 @@ def calc_payment_timeliness(delivery_df: pd.DataFrame,
                 })
             continue
 
-        del_remaining = grp_del[["发货日期", "发货金额"]].values.tolist()
+        # 只把"正发货"放入 FIFO 池；负发货（退货）不参与回款匹配
+        del_remaining = [
+            [d_date, float(d_amt)]
+            for d_date, d_amt in grp_del[["发货日期", "发货金额"]].values.tolist()
+            if float(d_amt) > 0.01
+        ]
         del_idx = 0
 
+        # 已匹配历史栈（供负回款 LIFO 冲销用）
+        # 每项：[发货日, 剩余可冲销金额, rate]
+        allocation_stack: list[list] = []
+
         for _, pr in grp_pay.sort_values("回款日期").iterrows():
-            pay_amount = pr["回款金额"]
+            pay_amount = float(pr["回款金额"])
             pay_date = pr["回款日期"]
 
-            while pay_amount > 0.01 and del_idx < len(del_remaining):
-                d_date, d_remain = del_remaining[del_idx]
-                matched = min(pay_amount, d_remain)
-
-                if pd.notna(pay_date) and pd.notna(d_date):
-                    cycle = (pd.Timestamp(pay_date) - pd.Timestamp(d_date)).days
-                else:
-                    cycle = None
-
-                rate = get_payment_timeliness_rate(cycle, tiers) if cycle is not None else 0
-
-                timeliness_rows.append({
-                    "合同编号": project, "销售员": salesperson, "销售部门": dept,
-                    "回款金额": round(matched, 2), "回款日期": pay_date,
-                    "匹配发货日期": d_date, "回款周期(天)": cycle,
-                    "时效提成比例": f"{rate*100:.4f}%",
-                    "时效提成金额": round(matched * rate, 2),
-                })
-
-                del_remaining[del_idx][1] -= matched
-                if del_remaining[del_idx][1] < 0.01:
-                    del_idx += 1
-                pay_amount -= matched
-
+            # ── 正回款：FIFO 消耗正发货 ──
             if pay_amount > 0.01:
-                timeliness_rows.append({
-                    "合同编号": project, "销售员": salesperson, "销售部门": dept,
-                    "回款金额": round(pay_amount, 2), "回款日期": pay_date,
-                    "匹配发货日期": None, "回款周期(天)": None,
-                    "时效提成比例": "超出发货额", "时效提成金额": 0,
-                })
+                while pay_amount > 0.01 and del_idx < len(del_remaining):
+                    d_date, d_remain = del_remaining[del_idx]
+                    matched = min(pay_amount, d_remain)
+
+                    if pd.notna(pay_date) and pd.notna(d_date):
+                        cycle = (pd.Timestamp(pay_date) - pd.Timestamp(d_date)).days
+                    else:
+                        cycle = None
+
+                    rate = (
+                        get_payment_timeliness_rate(cycle, tiers)
+                        if cycle is not None else 0
+                    )
+
+                    timeliness_rows.append({
+                        "合同编号": project, "销售员": salesperson, "销售部门": dept,
+                        "回款金额": round(matched, 2), "回款日期": pay_date,
+                        "匹配发货日期": d_date, "回款周期(天)": cycle,
+                        "时效提成比例": f"{rate*100:.4f}%",
+                        "时效提成金额": round(matched * rate, 2),
+                    })
+                    allocation_stack.append([d_date, matched, rate])
+
+                    del_remaining[del_idx][1] -= matched
+                    if del_remaining[del_idx][1] < 0.01:
+                        del_idx += 1
+                    pay_amount -= matched
+
+                if pay_amount > 0.01:
+                    timeliness_rows.append({
+                        "合同编号": project, "销售员": salesperson, "销售部门": dept,
+                        "回款金额": round(pay_amount, 2), "回款日期": pay_date,
+                        "匹配发货日期": None, "回款周期(天)": None,
+                        "时效提成比例": "超出发货额", "时效提成金额": 0,
+                    })
+
+            # ── 负回款（退款）：LIFO 冲销之前的匹配记录 ──
+            elif pay_amount < -0.01:
+                need = -pay_amount  # 待冲销正数
+                while need > 0.01 and allocation_stack:
+                    d_date, avail, rate = allocation_stack[-1]
+                    take = min(need, avail)
+
+                    if pd.notna(pay_date) and pd.notna(d_date):
+                        cycle = (pd.Timestamp(pay_date) - pd.Timestamp(d_date)).days
+                    else:
+                        cycle = None
+
+                    timeliness_rows.append({
+                        "合同编号": project, "销售员": salesperson, "销售部门": dept,
+                        "回款金额": round(-take, 2), "回款日期": pay_date,
+                        "匹配发货日期": d_date, "回款周期(天)": cycle,
+                        "时效提成比例": f"{rate*100:.4f}% (退款冲销)",
+                        "时效提成金额": round(-take * rate, 2),
+                    })
+
+                    allocation_stack[-1][1] -= take
+                    if allocation_stack[-1][1] < 0.01:
+                        allocation_stack.pop()
+                    need -= take
+
+                if need > 0.01:
+                    # 没有历史可冲销（先退款后收款等异常场景）
+                    timeliness_rows.append({
+                        "合同编号": project, "销售员": salesperson, "销售部门": dept,
+                        "回款金额": round(-need, 2), "回款日期": pay_date,
+                        "匹配发货日期": None, "回款周期(天)": None,
+                        "时效提成比例": "无可冲销记录", "时效提成金额": 0,
+                    })
 
     timeliness_df = pd.DataFrame(timeliness_rows) if timeliness_rows else pd.DataFrame()
     return timeliness_df, del_summary, pay_summary

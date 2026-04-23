@@ -296,3 +296,76 @@ def test_calc_payment_timeliness_fifo_matches():
     # 李四: 20000 对齐 C2, 周期 29 天
     li_row = tl[tl["销售员"] == "李四"].iloc[0]
     assert li_row["回款周期(天)"] == 29
+
+
+def test_calc_payment_timeliness_refund_reverses_latest():
+    """负回款（退款）应按 LIFO 冲销上一次正回款，产生同比例的负提成。"""
+    d = pd.DataFrame([
+        {"销售员": "王五", "销售部门": "销售部", "合同编号": "C9",
+         "发货日期": pd.Timestamp("2024-01-01"), "发货金额": 10000,
+         "订货单位": "X", "开票单位": "X"},
+    ])
+    p = pd.DataFrame([
+        {"销售员": "王五", "销售部门": "销售部", "合同编号": "C9",
+         "回款日期": pd.Timestamp("2024-02-10"), "回款金额": 10000,
+         "核销金额": 10000, "开票单位": "X"},
+        {"销售员": "王五", "销售部门": "销售部", "合同编号": "C9",
+         "回款日期": pd.Timestamp("2024-03-01"), "回款金额": -4000,
+         "核销金额": -4000, "开票单位": "X"},
+    ])
+    tl, _, _ = calc_payment_timeliness(d, p)
+    rows = tl.sort_values("回款日期").reset_index(drop=True)
+    # 两条记录：一条正、一条冲销
+    assert len(rows) == 2
+    r_pos, r_neg = rows.iloc[0], rows.iloc[1]
+    # 正回款全额匹配
+    assert r_pos["回款金额"] == 10000
+    assert r_pos["时效提成金额"] > 0
+    rate_pos = r_pos["时效提成金额"] / r_pos["回款金额"]
+    # 负回款按同比例产生负提成，且匹配到同一笔发货
+    assert r_neg["回款金额"] == -4000
+    assert r_neg["匹配发货日期"] == pd.Timestamp("2024-01-01")
+    assert "退款冲销" in str(r_neg["时效提成比例"])
+    assert r_neg["时效提成金额"] == round(-4000 * rate_pos, 2)
+
+
+def test_calc_payment_timeliness_refund_without_history():
+    """先退款后没有可冲销记录：生成一条占位行，提成为 0。"""
+    d = pd.DataFrame([
+        {"销售员": "赵六", "销售部门": "销售部", "合同编号": "C10",
+         "发货日期": pd.Timestamp("2024-01-01"), "发货金额": 5000,
+         "订货单位": "X", "开票单位": "X"},
+    ])
+    p = pd.DataFrame([
+        {"销售员": "赵六", "销售部门": "销售部", "合同编号": "C10",
+         "回款日期": pd.Timestamp("2024-02-01"), "回款金额": -1000,
+         "核销金额": -1000, "开票单位": "X"},
+    ])
+    tl, _, _ = calc_payment_timeliness(d, p)
+    assert len(tl) == 1
+    row = tl.iloc[0]
+    assert row["回款金额"] == -1000
+    assert row["时效提成金额"] == 0
+    assert row["时效提成比例"] == "无可冲销记录"
+
+
+def test_calc_payment_timeliness_negative_delivery_excluded_from_pool():
+    """退货（负发货）不应进入 FIFO 池，避免把正回款"反向匹配"掉。"""
+    d = pd.DataFrame([
+        {"销售员": "孙七", "销售部门": "销售部", "合同编号": "C11",
+         "发货日期": pd.Timestamp("2024-01-01"), "发货金额": 8000,
+         "订货单位": "X", "开票单位": "X"},
+        {"销售员": "孙七", "销售部门": "销售部", "合同编号": "C11",
+         "发货日期": pd.Timestamp("2024-01-15"), "发货金额": -3000,
+         "订货单位": "X", "开票单位": "X"},
+    ])
+    p = pd.DataFrame([
+        {"销售员": "孙七", "销售部门": "销售部", "合同编号": "C11",
+         "回款日期": pd.Timestamp("2024-02-10"), "回款金额": 8000,
+         "核销金额": 8000, "开票单位": "X"},
+    ])
+    tl, _, _ = calc_payment_timeliness(d, p)
+    # 单一正回款全额匹配到 2024-01-01 那笔正发货（而非被负发货抵扣）
+    assert len(tl) == 1
+    assert tl.iloc[0]["回款金额"] == 8000
+    assert tl.iloc[0]["匹配发货日期"] == pd.Timestamp("2024-01-01")
