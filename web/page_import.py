@@ -14,6 +14,7 @@ from engine.calculator import (
 )
 from db.database import save_import_snapshots
 from web._cache import bump_data_version, get_project_list, get_contract_overview
+from web.page_balance import render_opening_balance_import
 
 
 def _upload_and_load(
@@ -103,3 +104,8 @@ def render_import(username: str):
             with st.container(border=True):
                 st.subheader("合同编号汇总")
                 st.dataframe(overview, width="stretch", height=min(400, 35 + len(overview) * 36))
+
+        st.markdown("")
+        with st.container(border=True):
+            st.subheader("期初结余（可选）")
+            render_opening_balance_import()

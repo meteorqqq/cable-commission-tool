@@ -19,6 +19,7 @@ from web.page_payment import render_payment
 from web.page_total import render_total
 from web.page_history import render_history
 from web.page_salesperson import render_salesperson
+from web.page_balance import render_balance
 from db.database import load_import_snapshots
 from web._cache import bump_data_version
 
@@ -690,6 +691,7 @@ NAV_ITEMS = [
     "利润提成",
     "回款时效提成",
     "总提成汇总",
+    "结余合同",
     "历史记录",
 ]
 
@@ -870,6 +872,7 @@ def main():
         "利润提成": lambda: render_profit(username),
         "回款时效提成": lambda: render_payment(username),
         "总提成汇总": lambda: render_total(username),
+        "结余合同": lambda: render_balance(username),
         "历史记录": lambda: render_history(username),
     }
     page_map[page]()
