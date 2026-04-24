@@ -35,6 +35,7 @@ from web._ui import fmt_money, section_title, page_intro, empty_state
 
 _BAL_COLS = [
     "销售员", "销售部门", "合同编号", "主合同编号", "开票单位",
+    "完成比提成比例", "利润提成率",
     "累计发货额", "累计回款额", "结余金额", "业务标记",
     "状态", "最近发货日期", "最近回款日期",
 ]
@@ -96,6 +97,27 @@ def _build_balance_df(
     inv_sp_map = get_invoice_units_by_contract_sp()
     inv_map = get_invoice_units_by_contract()
     dept_map = get_salesperson_dept_map()
+    quota_df = st.session_state.get("quota_result")
+    profit_df = st.session_state.get("profit_result")
+
+    quota_rate_map: dict[str, str] = {}
+    if quota_df is not None and not quota_df.empty and "销售员" in quota_df.columns:
+        for _, r in quota_df.iterrows():
+            sp = str(r.get("销售员", "") or "").strip()
+            if not sp:
+                continue
+            quota_rate_map[sp] = str(r.get("提成比例", "") or "")
+
+    profit_rate_map: dict[tuple[str, str], str] = {}
+    if (
+        profit_df is not None
+        and not profit_df.empty
+        and "销售员" in profit_df.columns
+        and "合同编号" in profit_df.columns
+    ):
+        for _, r in profit_df.iterrows():
+            key = (str(r.get("合同编号", "") or ""), str(r.get("销售员", "") or ""))
+            profit_rate_map[key] = str(r.get("利润提成率", "") or "")
 
     out = []
     for (pid, sp), v in rows.items():
@@ -114,6 +136,8 @@ def _build_balance_df(
             "合同编号": pid,
             "主合同编号": v.get("主合同编号", pid) or pid,
             "开票单位": inv_sp_map.get((pid, sp)) or inv_map.get(pid, ""),
+            "完成比提成比例": quota_rate_map.get(sp, ""),
+            "利润提成率": profit_rate_map.get((pid, sp), ""),
             "累计发货额": d,
             "累计回款额": p,
             "结余金额": round(d - p, 2),

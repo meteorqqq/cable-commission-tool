@@ -442,3 +442,22 @@ def test_calc_payment_timeliness_generates_isolated_return_placeholder():
     assert row["回款金额"] == pytest.approx(-2500.0)
     assert row["时效提成金额"] == 0
     assert row["时效提成比例"] == "孤立退货（无历史发货）"
+
+
+def test_calc_payment_timeliness_includes_customer_unit():
+    d = pd.DataFrame([
+        {"销售员": "周九", "销售部门": "销售部", "合同编号": "C13",
+         "发货日期": pd.Timestamp("2024-01-01"), "发货金额": 8000,
+         "订货单位": "客户甲", "开票单位": "开票甲"},
+    ])
+    p = pd.DataFrame([
+        {"销售员": "周九", "销售部门": "销售部", "合同编号": "C13",
+         "回款日期": pd.Timestamp("2024-01-20"), "回款金额": 5000,
+         "核销金额": 5000, "开票单位": "开票甲"},
+    ])
+
+    tl, _, _ = calc_payment_timeliness(d, p)
+
+    assert len(tl) == 1
+    assert "客户单位" in tl.columns
+    assert tl.iloc[0]["客户单位"] == "客户甲"

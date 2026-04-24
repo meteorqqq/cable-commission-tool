@@ -845,7 +845,7 @@ def build_salesperson_detail(
     tl_amount: dict[str, float] = {}
     if timeliness_df is not None and not timeliness_df.empty and "销售员" in timeliness_df.columns:
         sub = timeliness_df[timeliness_df["销售员"].astype(str) == salesperson]
-        cols_pref = ["回款日期", "业务类型", "回款金额", "匹配发货日期", "回款周期(天)",
+        cols_pref = ["客户单位", "回款日期", "业务类型", "回款金额", "匹配发货日期", "回款周期(天)",
                      "时效提成比例", "时效提成金额"]
         for pid, grp in sub.groupby(sub["合同编号"].astype(str)):
             keep = [c for c in cols_pref if c in grp.columns]
@@ -1268,17 +1268,44 @@ def calc_payment_timeliness(delivery_df: pd.DataFrame,
     # ── FIFO 匹配（支持退款：按 LIFO 冲销已匹配历史）──
     timeliness_rows = []
 
+    def _first_nonempty(series: pd.Series | None) -> str:
+        if series is None:
+            return ""
+        for v in series.dropna().tolist():
+            s = str(v).strip()
+            if s and s.lower() not in ("nan", "none"):
+                return s
+        return ""
+
+    def _resolve_customer_unit(
+        grp_del: pd.DataFrame | None,
+        grp_pay: pd.DataFrame | None,
+    ) -> str:
+        for df, col in (
+            (grp_pay, "订货单位"),
+            (grp_del, "订货单位"),
+            (grp_pay, "开票单位"),
+            (grp_del, "开票单位"),
+        ):
+            if df is not None and not df.empty and col in df.columns:
+                s = _first_nonempty(df[col])
+                if s:
+                    return s
+        return ""
+
     for (salesperson, project), grp_pay in payment_df.groupby(["销售员", "合同编号"]):
         grp_del = delivery_df[
             (delivery_df["销售员"] == salesperson) & (delivery_df["合同编号"] == project)
         ].sort_values("发货日期").copy()
 
         dept = dept_map.get(salesperson, "")
+        customer_unit = _resolve_customer_unit(grp_del, grp_pay)
 
         if grp_del.empty:
             for _, pr in grp_pay.iterrows():
                 timeliness_rows.append({
                     "合同编号": project, "销售员": salesperson, "销售部门": dept,
+                    "客户单位": customer_unit,
                     "回款金额": round(pr["回款金额"], 2), "回款日期": pr["回款日期"],
                     "匹配发货日期": None, "回款周期(天)": None,
                     "业务类型": payment_business_type(pr["回款金额"]),
@@ -1320,6 +1347,7 @@ def calc_payment_timeliness(delivery_df: pd.DataFrame,
 
                     timeliness_rows.append({
                         "合同编号": project, "销售员": salesperson, "销售部门": dept,
+                        "客户单位": customer_unit,
                         "回款金额": round(matched, 2), "回款日期": pay_date,
                         "匹配发货日期": d_date, "回款周期(天)": cycle,
                         "业务类型": "回款",
@@ -1336,6 +1364,7 @@ def calc_payment_timeliness(delivery_df: pd.DataFrame,
                 if pay_amount > 0.01:
                     timeliness_rows.append({
                         "合同编号": project, "销售员": salesperson, "销售部门": dept,
+                        "客户单位": customer_unit,
                         "回款金额": round(pay_amount, 2), "回款日期": pay_date,
                         "匹配发货日期": None, "回款周期(天)": None,
                         "业务类型": "回款",
@@ -1356,6 +1385,7 @@ def calc_payment_timeliness(delivery_df: pd.DataFrame,
 
                     timeliness_rows.append({
                         "合同编号": project, "销售员": salesperson, "销售部门": dept,
+                        "客户单位": customer_unit,
                         "回款金额": round(-take, 2), "回款日期": pay_date,
                         "匹配发货日期": d_date, "回款周期(天)": cycle,
                         "业务类型": "退款",
@@ -1372,6 +1402,7 @@ def calc_payment_timeliness(delivery_df: pd.DataFrame,
                     # 没有历史可冲销（先退款后收款等异常场景）
                     timeliness_rows.append({
                         "合同编号": project, "销售员": salesperson, "销售部门": dept,
+                        "客户单位": customer_unit,
                         "回款金额": round(-need, 2), "回款日期": pay_date,
                         "匹配发货日期": None, "回款周期(天)": None,
                         "业务类型": "退款",
@@ -1384,6 +1415,10 @@ def calc_payment_timeliness(delivery_df: pd.DataFrame,
                 "合同编号": str(r.get("合同编号", "") or ""),
                 "销售员": str(r.get("销售员", "") or ""),
                 "销售部门": str(r.get("销售部门", "") or dept_map.get(str(r.get("销售员", "") or ""), "")),
+                "客户单位": (
+                    str(r.get("订货单位", "") or "")
+                    or str(r.get("开票单位", "") or "")
+                ),
                 "回款金额": round(float(r.get("孤立退货金额", 0) or 0), 2),
                 "回款日期": r.get("发货日期"),
                 "匹配发货日期": None,
