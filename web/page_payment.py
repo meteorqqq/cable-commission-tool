@@ -4,13 +4,15 @@ import streamlit as st
 import pandas as pd
 
 from engine.calculator import (
+    annotate_delivery_business_type,
+    annotate_payment_business_type,
     calc_payment_timeliness, DEFAULT_PAYMENT_TIERS, format_date_columns,
     contract_status as _status_of,
 )
 from db.database import save_rules, load_rules
 from web._ui import (
     fmt_money, split_units, truncate_units_text,
-    status_badge, unit_pills, kpi_row, meta_row, section_title,
+    status_badge, unit_pills, kpi_row, meta_row, section_title, page_intro,
 )
 from web._download import (
     render_df_download_buttons,
@@ -49,11 +51,23 @@ def _build_contract_summary(
         grp = delivery_df.groupby(["合同编号", "销售员"])["发货金额"].sum()
         for (pid, sp), amt in grp.items():
             rows.setdefault((str(pid), str(sp)), {})["发货额"] = float(amt)
+        grp_neg = delivery_df.groupby(["合同编号", "销售员"])["发货金额"].apply(
+            lambda s: bool((pd.to_numeric(s, errors="coerce").fillna(0) < -0.01).any())
+        )
+        for key, has_neg in grp_neg.items():
+            if has_neg:
+                rows.setdefault((str(key[0]), str(key[1])), {})["含退货"] = True
 
     if payment_df is not None and not payment_df.empty:
         grp = payment_df.groupby(["合同编号", "销售员"])["回款金额"].sum()
         for (pid, sp), amt in grp.items():
             rows.setdefault((str(pid), str(sp)), {})["回款额"] = float(amt)
+        grp_neg = payment_df.groupby(["合同编号", "销售员"])["回款金额"].apply(
+            lambda s: bool((pd.to_numeric(s, errors="coerce").fillna(0) < -0.01).any())
+        )
+        for key, has_neg in grp_neg.items():
+            if has_neg:
+                rows.setdefault((str(key[0]), str(key[1])), {})["含退款"] = True
 
     tl_grp = {}
     if timeliness_df is not None and not timeliness_df.empty:
@@ -71,6 +85,11 @@ def _build_contract_summary(
     for (pid, sp), v in rows.items():
         d_amt = round(v.get("发货额", 0.0), 2)
         p_amt = round(v.get("回款额", 0.0), 2)
+        business_flags = []
+        if v.get("含退货"):
+            business_flags.append("有退货")
+        if v.get("含退款"):
+            business_flags.append("有退款")
         out.append({
             "合同编号": pid,
             "开票单位": inv_sp_map.get((pid, sp)) or inv_map.get(pid, ""),
@@ -79,6 +98,7 @@ def _build_contract_summary(
             "发货额": d_amt,
             "回款额": p_amt,
             "未回款额": round(max(d_amt - p_amt, 0), 2),
+            "业务标记": " / ".join(business_flags),
             "时效提成合计": round(tl_grp.get((pid, sp), 0.0), 2),
             "状态": _status_of(d_amt, p_amt),
         })
@@ -113,18 +133,22 @@ def _build_sp_export_sheets(
             sub = sub[sub["销售员"].astype(str) == str(sp)]
         elif "合同编号" in sub.columns:
             sub = sub[sub["合同编号"].astype(str).isin(pids)]
+        if "发货金额" in sub.columns:
+            sub = annotate_delivery_business_type(sub)
+        if "回款金额" in sub.columns:
+            sub = annotate_payment_business_type(sub)
         return sub.reset_index(drop=True)
 
     del_cols_pref = [
-        "发货日期", "合同编号", "销售员", "销售部门",
+        "发货日期", "业务类型", "合同编号", "销售员", "销售部门",
         "发货金额", "订货单位", "开票单位",
     ]
     pay_cols_pref = [
-        "回款日期", "合同编号", "销售员", "销售部门",
+        "回款日期", "业务类型", "合同编号", "销售员", "销售部门",
         "回款金额", "核销金额", "开票单位", "订货单位",
     ]
     tl_cols_pref = [
-        "合同编号", "销售员", "销售部门", "回款日期", "回款金额",
+        "合同编号", "销售员", "销售部门", "回款日期", "业务类型", "回款金额",
         "匹配发货日期", "回款周期(天)", "时效提成比例", "时效提成金额",
     ]
 
@@ -227,7 +251,11 @@ def _build_and_offer_per_sp_download(
 
 
 def render_payment(username: str):
-    st.header("回款时效提成")
+    st.html(page_intro(
+        "回款时效提成",
+        "按回款和发货的匹配关系计算时效提成，退款会自动冲销，孤立退货会单独留痕。",
+        eyebrow="Timeliness Commission",
+    ))
 
     delivery_df = st.session_state.get("delivery_df")
     payment_df = st.session_state.get("payment_df")
@@ -369,7 +397,9 @@ def render_payment(username: str):
     with fc1:
         filter_status = st.multiselect(
             "按状态筛选",
-            options=["已完成", "部分回款", "未回款", "未发货", "未发货（已收款）"],
+            options=[
+                "已完成", "部分回款", "未回款", "未发货", "未发货（已收款）",
+            ],
             default=[],
             key="payment_filter_status",
         )
@@ -393,9 +423,9 @@ def render_payment(username: str):
         help="只要该合同的开票单位包含任一选中单位即保留。",
     )
 
-    del_cols_pref = ["发货日期", "发货金额", "订货单位", "开票单位"]
-    pay_cols_pref = ["回款日期", "回款金额", "核销金额", "开票单位", "订货单位"]
-    tl_cols_pref = ["回款日期", "回款金额", "匹配发货日期", "回款周期(天)",
+    del_cols_pref = ["发货日期", "业务类型", "发货金额", "订货单位", "开票单位"]
+    pay_cols_pref = ["回款日期", "业务类型", "回款金额", "核销金额", "开票单位", "订货单位"]
+    tl_cols_pref = ["回款日期", "业务类型", "回款金额", "匹配发货日期", "回款周期(天)",
                     "时效提成比例", "时效提成金额"]
 
     def _row_passes(row) -> bool:
@@ -454,6 +484,8 @@ def render_payment(username: str):
                 metas.append(("销售部门", row["销售部门"]))
             metas.append(("销售员", str(sp)))
             metas.append(("合同编号", str(pid)))
+            if row.get("业务标记"):
+                metas.append(("业务标记", str(row["业务标记"])))
             st.html(meta_row(metas))
 
             if units:
@@ -468,9 +500,9 @@ def render_payment(username: str):
             ]))
 
             key = (str(pid), str(sp))
-            d_sub = del_lookup.get(key, pd.DataFrame())
-            p_sub = pay_lookup.get(key, pd.DataFrame())
-            tl_sub = tl_lookup.get(key, pd.DataFrame())
+            d_sub = annotate_delivery_business_type(del_lookup.get(key, pd.DataFrame()))
+            p_sub = annotate_payment_business_type(pay_lookup.get(key, pd.DataFrame()))
+            tl_sub = annotate_payment_business_type(tl_lookup.get(key, pd.DataFrame()))
 
             col_d, col_p = st.columns(2, gap="large")
             with col_d:

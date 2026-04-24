@@ -21,7 +21,7 @@ from web._download import render_df_download_buttons
 from web._table import dataframe_with_fulltext_panel
 from web._ui import (
     fmt_money, split_units, truncate_units_text,
-    meta_row, section_title, kpi_row, unit_pills,
+    meta_row, section_title, kpi_row, unit_pills, page_intro,
 )
 from db.database import (
     save_rules, load_rules, save_contract_prices, load_contract_prices,
@@ -364,7 +364,11 @@ def _render_price_groups(price_df: pd.DataFrame) -> None:
 
 
 def render_profit(username: str):
-    st.header("利润提成")
+    st.html(page_intro(
+        "利润提成",
+        "根据合同价格、指导价与成本价生成利润提成率，并按合同回款额自动计算提成。",
+        eyebrow="Profit Engine",
+    ))
 
     delivery_df = st.session_state.get("delivery_df")
     payment_df = st.session_state.get("payment_df")
@@ -736,7 +740,7 @@ def render_profit(username: str):
 
             m1, m2, m3, m4 = st.columns(4, gap="medium")
             total_n = len(display_df)
-            commissioned_n = int((display_df.get("利润提成金额", pd.Series(dtype=float)).fillna(0) > 0).sum())
+            commissioned_n = int((display_df.get("利润提成金额", pd.Series(dtype=float)).fillna(0).abs() > 0.005).sum())
             total_pay = float(pd.to_numeric(display_df.get("合同回款额", 0), errors="coerce").fillna(0).sum())
             total_commission = float(pd.to_numeric(display_df.get("利润提成金额", 0), errors="coerce").fillna(0).sum())
             with m1:
@@ -751,7 +755,9 @@ def render_profit(username: str):
             fc1, fc2 = st.columns([1, 1], gap="medium")
             with fc1:
                 if "状态" in display_df.columns:
-                    status_options = ["已完成", "部分回款", "未回款", "未发货", "未发货（已收款）"]
+                    status_options = [
+                        "已完成", "部分回款", "未回款", "未发货", "未发货（已收款）",
+                    ]
                     status_options = [s for s in status_options
                                        if s in set(display_df["状态"].unique())]
                     picked = st.multiselect(

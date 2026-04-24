@@ -10,6 +10,7 @@ from engine.calculator import (
 from web._ui import (
     fmt_money, truncate_units_text,
     status_badge, unit_pills, kpi_row, meta_row, section_title,
+    page_intro, panel_intro, empty_state,
 )
 from web._table import dataframe_with_fulltext_panel
 from web._cache import session_cache
@@ -39,8 +40,6 @@ _fmt_money = fmt_money
 
 
 def render_salesperson():
-    st.header("销售员详情")
-
     delivery_df = st.session_state.get("delivery_df")
     payment_df = st.session_state.get("payment_df")
     if delivery_df is None and payment_df is None:
@@ -49,7 +48,7 @@ def render_salesperson():
 
     names = _cached_salesperson_names()
     if not names:
-        st.info("未检测到销售员信息")
+        st.html(empty_state("未检测到销售员信息", "请先导入交货或回款数据，系统才会生成可选的销售员列表。"))
         return
 
     default_idx = 0
@@ -63,6 +62,17 @@ def render_salesperson():
     timeliness_df = st.session_state.get("timeliness_result")
 
     detail = _cached_salesperson_detail(sel)
+
+    st.html(page_intro(
+        f"{sel} 销售员详情",
+        "按合同拆开发货、回款、利润提成与回款时效提成，适合做逐单核对和异常追踪。",
+        eyebrow=detail["销售部门"] or "Sales Detail",
+        meta=[
+            ("合同数", f"{detail['合同数']} 个"),
+            ("总发货额", _fmt_money(detail["总发货额"])),
+            ("总回款额", _fmt_money(detail["总回款额"])),
+        ],
+    ))
 
     if profit_df is None or timeliness_df is None:
         missing = []
@@ -90,7 +100,7 @@ def render_salesperson():
         st.metric("时效提成", _fmt_money(detail.get("总时效提成", 0)))
 
     if not detail["合同列表"]:
-        st.info("该销售员名下暂无合同")
+        st.html(empty_state("该销售员名下暂无合同", "当前导入数据里还没有匹配到对应合同。"))
         return
 
     st.markdown("")
@@ -109,6 +119,7 @@ def render_salesperson():
             "发货额": c["发货额"],
             "回款额": c["回款额"],
             "未回款额": c["未回款额"],
+            "业务标记": c.get("业务标记", ""),
             "利润提成": c.get("利润提成", 0.0),
             "时效提成": c.get("时效提成", 0.0),
             "状态": c["状态"],
@@ -116,7 +127,7 @@ def render_salesperson():
     summary_df = pd.DataFrame(summary_rows)
 
     with st.container(border=True):
-        st.subheader("合同汇总")
+        st.html(panel_intro("合同汇总", "先看整体合同分布，再往下展开逐个合同核对明细。"))
         if other_contract is None:
             st.caption(
                 "未检测到「其他（无合同号）」条目。若源数据中确有无合同号明细，"
@@ -140,7 +151,7 @@ def render_salesperson():
         )
 
     st.markdown("")
-    st.subheader("合同明细")
+    st.html(panel_intro("合同明细", "每个合同都保留发货、回款和时效匹配明细，方便追查退款、退货与未回款。"))
 
     for c in normal_contracts:
         _render_contract_expander(c)
@@ -174,6 +185,7 @@ def _render_contract_expander(c: dict):
 
         st.html(meta_row([
             ("合同编号", str(c["合同编号"])),
+            ("业务标记", str(c.get("业务标记") or "")),
             ("利润提成率", str(c.get("利润提成率") or "")),
             ("利润分类", str(c.get("利润分类") or "")),
         ]))
@@ -246,6 +258,7 @@ def _render_other_section(other: dict):
             '<div style="font-size:1.05rem;font-weight:600;color:#0F172A;">其他（无合同号）</div>'
             f'{status_badge(other["状态"])}</div>'
         )
+        st.html(meta_row([("业务标记", str(other.get("业务标记") or ""))]))
         st.html(kpi_row([
             ("发货额", _fmt_money(other["发货额"]), False),
             ("回款额", _fmt_money(other["回款额"]), False),
@@ -308,6 +321,11 @@ def _render_other_section(other: dict):
             p_amt = float(p_sub["回款金额"].sum()) if "回款金额" in p_sub.columns else 0.0
             unpaid = max(d_amt - p_amt, 0.0)
             sub_status = contract_status(d_amt, p_amt)
+            unit_flags = []
+            if "业务类型" in d_sub.columns and d_sub["业务类型"].astype(str).eq("退货").any():
+                unit_flags.append("有退货")
+            if "业务类型" in p_sub.columns and p_sub["业务类型"].astype(str).eq("退款").any():
+                unit_flags.append("有退款")
 
             unit_short = unit if len(unit) <= 28 else unit[:28] + "…"
             header_segs = [unit_short, f"回款 {_fmt_money(p_amt)}"]
@@ -321,7 +339,10 @@ def _render_other_section(other: dict):
                     f'align-items:center;margin:.1rem 0 .35rem;">'
                     f'{status_badge(sub_status)}</div>'
                 )
-                st.html(meta_row([("客户", unit)]))
+                st.html(meta_row([
+                    ("客户", unit),
+                    ("业务标记", " / ".join(unit_flags)),
+                ]))
                 st.html(kpi_row([
                     ("发货额", _fmt_money(d_amt), False),
                     ("回款额", _fmt_money(p_amt), False),

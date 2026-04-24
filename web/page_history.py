@@ -6,14 +6,19 @@ import pandas as pd
 from db.database import list_sessions, load_session_results, delete_session
 from engine.calculator import format_date_columns
 from web._download import render_multi_download_buttons
+from web._ui import page_intro, empty_state
 
 
 def render_history(username: str):
-    st.header("历史记录")
+    st.html(page_intro(
+        "历史记录",
+        "查看历史计算快照、重新核对结果，并按需下载或删除旧会话。",
+        eyebrow="Archive",
+    ))
 
     sessions = list_sessions(username)
     if not sessions:
-        st.info("暂无历史记录")
+        st.html(empty_state("暂无历史记录", "当你保存一次计算结果后，这里会出现可回看的会话快照。"))
         return
 
     kw = st.text_input(

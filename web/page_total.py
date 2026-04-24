@@ -4,8 +4,12 @@ import streamlit as st
 import pandas as pd
 
 from db.database import save_calc_session
-from engine.calculator import contract_status as _status_of
-from web._ui import fmt_money, meta_row, kpi_row
+from engine.calculator import (
+    annotate_delivery_business_type,
+    annotate_payment_business_type,
+    contract_status as _status_of,
+)
+from web._ui import fmt_money, meta_row, kpi_row, page_intro, panel_intro, empty_state
 from web._download import render_df_download_buttons, render_multi_download_buttons
 from web._table import dataframe_with_fulltext_panel
 from web._cache import (
@@ -115,12 +119,24 @@ def _build_contract_breakdown_by_salesperson() -> dict[str, pd.DataFrame]:
         grp = delivery_df.groupby(["销售员", "合同编号"])["发货金额"].sum()
         for (sp, pid), amt in grp.items():
             rows.setdefault(_key(sp, pid), {})["合同发货额"] = float(amt)
+        grp_neg = delivery_df.groupby(["销售员", "合同编号"])["发货金额"].apply(
+            lambda s: bool((pd.to_numeric(s, errors="coerce").fillna(0) < -0.01).any())
+        )
+        for (sp, pid), has_neg in grp_neg.items():
+            if has_neg:
+                rows.setdefault(_key(sp, pid), {})["含退货"] = True
 
     if payment_df is not None and not payment_df.empty \
             and "销售员" in payment_df.columns and "合同编号" in payment_df.columns:
         grp = payment_df.groupby(["销售员", "合同编号"])["回款金额"].sum()
         for (sp, pid), amt in grp.items():
             rows.setdefault(_key(sp, pid), {})["合同回款额"] = float(amt)
+        grp_neg = payment_df.groupby(["销售员", "合同编号"])["回款金额"].apply(
+            lambda s: bool((pd.to_numeric(s, errors="coerce").fillna(0) < -0.01).any())
+        )
+        for (sp, pid), has_neg in grp_neg.items():
+            if has_neg:
+                rows.setdefault(_key(sp, pid), {})["含退款"] = True
 
     quota_rate_map: dict[str, float] = {}
     if quota_df is not None and not quota_df.empty and "销售员" in quota_df.columns:
@@ -189,6 +205,11 @@ def _build_contract_breakdown_by_salesperson() -> dict[str, pd.DataFrame]:
         tl_ratio = float(tl_info.get("时效系数", 0.0))
         tl_days = float(tl_info.get("时效天数", 0.0))
         status = prof.get("状态") or _status_of(d_amt, p_amt)
+        business_flags = []
+        if base.get("含退货"):
+            business_flags.append("有退货")
+        if base.get("含退款"):
+            business_flags.append("有退款")
 
         main_pid = prof.get("主合同编号") or main_map.get(pid, pid)
         by_sp.setdefault(sp, []).append({
@@ -197,6 +218,7 @@ def _build_contract_breakdown_by_salesperson() -> dict[str, pd.DataFrame]:
             "开票单位": inv_sp_map.get((pid, sp), ""),
             "合同发货额": d_amt,
             "合同回款额": p_amt,
+            "业务标记": " / ".join(business_flags),
             "完成额度系数": f"{quota_ratio * 100:.2f}%",
             "完成额度提成": quota_amt,
             "利润系数": round(float(prof.get("利润系数", 0.0)), 4),
@@ -252,6 +274,7 @@ def _build_contract_breakdown_flat(total_df: pd.DataFrame) -> pd.DataFrame:
                 "主合同编号": r.get("主合同编号", r["合同编号"]),
                 "合同编号": r["合同编号"],
                 "开票单位": r["开票单位"],
+                "业务标记": r.get("业务标记", ""),
                 "合同发货额": r["合同发货额"],
                 "合同回款额": r["合同回款额"],
                 "完成额度系数": r.get("完成额度系数", ""),
@@ -399,12 +422,31 @@ def _collect_export_sheets(total_df: pd.DataFrame) -> dict[str, pd.DataFrame]:
     ]:
         df = st.session_state.get(state_key)
         if df is not None and not df.empty:
+            if state_key == "delivery_df":
+                df = annotate_delivery_business_type(df)
+            elif state_key in ("payment_df", "timeliness_result"):
+                df = annotate_payment_business_type(df)
             sheets[key] = df
     return sheets
 
 
 def render_total(username: str):
-    st.header("总提成汇总")
+    total_df = st.session_state.get("total_result")
+    meta_items = [
+        ("当前状态", "已汇总" if total_df is not None and not total_df.empty else "待汇总"),
+    ]
+    if total_df is not None and not total_df.empty:
+        meta_items.extend([
+            ("销售员", f"{len(total_df)} 人"),
+            ("总提成", f"{total_df['总提成(元)'].sum():,.2f} 元"),
+            ("最高提成", f"{total_df['总提成(元)'].max():,.2f} 元"),
+        ])
+    st.html(page_intro(
+        "总提成汇总",
+        "把额度提成、利润提成和回款时效提成放到同一个视图里，适合做团队横向比较和合同复盘。",
+        eyebrow="Command Center",
+        meta=meta_items,
+    ))
 
     if st.button("汇总计算", type="primary", use_container_width=True):
         total_df = _build_total_df()
@@ -429,14 +471,13 @@ def render_total(username: str):
 
         st.markdown("")
         with st.container(border=True):
-            st.subheader("销售员提成汇总")
+            st.html(panel_intro("销售员提成汇总", "先看团队排名与提成结构，再下钻到个人与合同层级。"))
             st.dataframe(total_df, width="stretch", height=400)
 
         # ── 按销售员展示合同明细 ──
         st.markdown("")
         with st.container(border=True):
-            st.subheader("按销售员展开合同明细")
-            st.caption("点击任一销售员查看其名下所有合同的发货、回款、利润提成与时效提成。")
+            st.html(panel_intro("按销售员展开合同明细", "点击展开后可以查看该销售员名下所有合同的发货、回款、利润提成与时效提成。"))
 
             all_depts = sorted(
                 {str(d).strip() for d in total_df.get("销售部门", pd.Series(dtype=str)).dropna()
@@ -500,9 +541,8 @@ def render_total(username: str):
                         st.caption("（未匹配到合同明细，请确认已完成利润/时效提成计算）")
                     else:
                         display_cols = [
-                            "主合同编号", "合同编号", "开票单位",
-                            "合同发货额", "合同回款额",
-                            "完成额度系数", "完成额度提成",
+                            "主合同编号", "合同编号", "开票单位", "业务标记",
+                            "合同发货额", "合同回款额", "完成额度系数", "完成额度提成",
                             "利润系数", "利润提成率", "利润系数(提成率)",
                             "系数来源", "利润提成",
                             "时效天数", "时效系数", "回款时效提成",
@@ -546,7 +586,7 @@ def render_total(username: str):
                 shown += 1
 
             if shown == 0:
-                st.info("当前筛选条件下没有销售员。")
+                st.html(empty_state("当前筛选条件下没有销售员", "试着放宽部门或姓名搜索条件，再重新查看团队汇总。"))
 
         st.markdown("")
         col_dl, col_save = st.columns(2, gap="large")

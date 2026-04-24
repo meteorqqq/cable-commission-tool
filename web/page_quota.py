@@ -9,6 +9,7 @@ from engine.calculator import (
 from db.database import save_rules, load_rules
 from web._cache import bump_calc_version, get_salesperson_dept_map
 from web._download import render_df_download_buttons
+from web._ui import page_intro
 
 
 def _get_dept_list() -> list[str]:
@@ -51,7 +52,11 @@ def _calc_dept_delivery_totals() -> dict[str, float]:
 
 
 def render_quota(username: str):
-    st.header("完成额度提成")
+    st.html(page_intro(
+        "完成额度提成",
+        "按部门发货完成比确定档位，再用个人回款额乘以对应系数，适合看团队目标兑现情况。",
+        eyebrow="Quota Commission",
+    ))
 
     delivery_df = st.session_state.get("delivery_df")
     payment_df = st.session_state.get("payment_df")
@@ -153,7 +158,7 @@ def render_quota(username: str):
             ).fillna(0).sum())
             commissioned_n = int((pd.to_numeric(
                 result.get("完成额度提成(元)", 0), errors="coerce"
-            ).fillna(0) > 0).sum())
+            ).fillna(0).abs() > 0.005).sum())
             with m1:
                 st.metric("销售员数", f"{total_sp}")
             with m2:

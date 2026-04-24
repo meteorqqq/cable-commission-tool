@@ -30,7 +30,7 @@ st.set_page_config(
 )
 
 GLOBAL_CSS = """<style>
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=IBM+Plex+Mono:wght@400;500&display=swap');
 
 /* ───────── Design Tokens ───────── */
 :root {
@@ -59,7 +59,7 @@ GLOBAL_CSS = """<style>
 
 /* ───────── Base ───────── */
 html, body, [class*="stApp"], [class*="css"] {
-    font-family: 'Inter', -apple-system, BlinkMacSystemFont, "Segoe UI",
+    font-family: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, "Segoe UI",
                  "PingFang SC", "Microsoft YaHei", sans-serif !important;
     color: var(--color-ink);
     -webkit-font-smoothing: antialiased;
@@ -320,7 +320,7 @@ div[data-testid="stMetric"] [data-testid="stMetricDelta"] {
 /* ───────── Buttons ───────── */
 .stButton > button, .stDownloadButton > button {
     border-radius: var(--radius-sm);
-    font-weight: 500;
+    font-weight: 600;
     border: 1px solid var(--color-border);
     background: #FFFFFF;
     color: var(--color-ink);
@@ -354,6 +354,7 @@ div[data-testid="stMetric"] [data-testid="stMetricDelta"] {
     border-color: var(--color-border) !important;
     background: var(--color-bg);
     box-shadow: var(--shadow-sm);
+    overflow: hidden;
 }
 
 /* ───────── Expander ───────── */
@@ -401,23 +402,76 @@ div[data-testid="stMetric"] [data-testid="stMetricDelta"] {
     border-radius: var(--radius);
     overflow: hidden;
     box-shadow: var(--shadow-sm);
+    background: rgba(255,255,255,0.92);
 }
 [data-testid="stDataFrame"] [data-baseweb="table-cell"]:hover,
 [data-testid="stDataEditor"] [data-baseweb="table-cell"]:hover {
     background: var(--color-surface) !important;
 }
+[data-testid="stDataFrame"] [role="columnheader"],
+[data-testid="stDataEditor"] [role="columnheader"] {
+    background: linear-gradient(180deg, #F8FAFC 0%, #F1F5F9 100%) !important;
+    color: var(--color-ink-soft) !important;
+    font-weight: 700 !important;
+    border-bottom: 1px solid rgba(226, 232, 240, 0.95) !important;
+}
+[data-testid="stDataFrame"] [role="gridcell"],
+[data-testid="stDataEditor"] [role="gridcell"] {
+    border-color: rgba(241, 245, 249, 0.95) !important;
+}
 
 /* ───────── Inputs ───────── */
 .stTextInput input, .stNumberInput input,
-.stTextArea textarea, .stSelectbox div[data-baseweb="select"] > div {
+.stTextArea textarea, .stSelectbox div[data-baseweb="select"] > div,
+.stMultiSelect div[data-baseweb="select"] > div {
     border-radius: var(--radius-sm) !important;
     border-color: var(--color-border) !important;
     transition: border-color var(--transition), box-shadow var(--transition);
+    background: rgba(255,255,255,0.9) !important;
 }
 .stTextInput input:focus, .stNumberInput input:focus,
 .stTextArea textarea:focus {
     border-color: var(--color-ink) !important;
     box-shadow: 0 0 0 3px rgba(15,23,42,0.06) !important;
+}
+[data-baseweb="tag"] {
+    border-radius: 999px !important;
+    background: linear-gradient(180deg, #FFFFFF 0%, #F8FAFC 100%) !important;
+    border: 1px solid #CBD5E1 !important;
+    box-shadow: inset 0 1px 0 rgba(255,255,255,0.85) !important;
+}
+[data-baseweb="tag"] *,
+[data-baseweb="tag"] span,
+[data-baseweb="tag"] div {
+    color: #334155 !important;
+    fill: #334155 !important;
+    opacity: 1 !important;
+}
+[data-baseweb="tag"] svg {
+    color: #64748B !important;
+    fill: #64748B !important;
+}
+[data-baseweb="select"] input::placeholder {
+    color: #64748B !important;
+    opacity: 1 !important;
+}
+
+/* ───────── File uploader ───────── */
+[data-testid="stFileUploader"] section {
+    border: 1px dashed rgba(148, 163, 184, 0.55) !important;
+    border-radius: 16px !important;
+    background:
+        radial-gradient(240px 120px at 15% 10%, rgba(212,175,55,0.08), transparent 70%),
+        linear-gradient(180deg, rgba(255,255,255,0.95) 0%, rgba(248,250,252,0.9) 100%) !important;
+    transition: border-color var(--transition), transform var(--transition), box-shadow var(--transition);
+}
+[data-testid="stFileUploader"] section:hover {
+    border-color: rgba(212,175,55,0.8) !important;
+    box-shadow: 0 16px 34px -26px rgba(15,23,42,0.28);
+    transform: translateY(-1px);
+}
+[data-testid="stFileUploader"] small {
+    color: var(--color-mute) !important;
 }
 
 /* ───────── Alerts ───────── */
@@ -565,6 +619,8 @@ div[data-testid="stMetric"] [data-testid="stMetricDelta"] {
 .rc-badge.is-unpaid  { background:#FEE2E2; color:#B91C1C; }
 .rc-badge.is-undeliv { background:#E2E8F0; color:#475569; }
 .rc-badge.is-prepaid { background:#DBEAFE; color:#1D4ED8; }
+.rc-badge.is-refund  { background:#FCE7F3; color:#BE185D; }
+.rc-badge.is-return  { background:#EDE9FE; color:#6D28D9; }
 
 .rc-pill {
     display: inline-block;
@@ -624,6 +680,162 @@ div[data-testid="stMetric"] [data-testid="stMetricDelta"] {
     margin: 0.6rem 0 0.3rem;
 }
 
+.rc-page-hero {
+    position: relative;
+    overflow: hidden;
+    margin: 0 0 1.15rem;
+    padding: 1.25rem 1.35rem 1.3rem;
+    border: 1px solid rgba(226, 232, 240, 0.96);
+    border-radius: 22px;
+    background:
+        linear-gradient(135deg, rgba(255,255,255,0.96) 0%, rgba(250,250,249,0.92) 58%, rgba(248,250,252,0.98) 100%);
+    box-shadow:
+        0 1px 2px rgba(15, 23, 42, 0.04),
+        0 24px 60px -38px rgba(15, 23, 42, 0.24);
+}
+.rc-page-inner {
+    position: relative;
+    z-index: 1;
+}
+.rc-page-orbit {
+    position: absolute;
+    border-radius: 999px;
+    pointer-events: none;
+}
+.rc-page-orbit-a {
+    right: -52px;
+    top: -64px;
+    width: 220px;
+    height: 220px;
+    background: radial-gradient(circle, rgba(212,175,55,0.18) 0%, rgba(212,175,55,0.05) 42%, transparent 72%);
+}
+.rc-page-orbit-b {
+    left: 62%;
+    bottom: -88px;
+    width: 240px;
+    height: 180px;
+    background: radial-gradient(circle, rgba(15,23,42,0.08) 0%, transparent 70%);
+}
+.rc-page-eyebrow {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.42rem;
+    padding: 0.32rem 0.72rem;
+    border-radius: 999px;
+    border: 1px solid rgba(226, 232, 240, 0.95);
+    background: rgba(255,255,255,0.86);
+    color: var(--color-ink-soft);
+    font-size: 0.76rem;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    box-shadow: var(--shadow-sm);
+}
+.rc-page-eyebrow::before {
+    content: "";
+    width: 8px;
+    height: 8px;
+    border-radius: 3px;
+    background: linear-gradient(135deg, #E7C75A 0%, var(--color-accent) 100%);
+    box-shadow: 0 0 0 1px rgba(212,175,55,0.25);
+}
+.rc-page-title {
+    margin: 0.85rem 0 0.35rem;
+    font-size: clamp(1.55rem, 3.2vw, 2.15rem);
+    line-height: 1.08;
+    letter-spacing: -0.04em;
+    color: var(--color-ink);
+    font-weight: 800;
+}
+.rc-page-sub {
+    margin: 0;
+    max-width: 860px;
+    color: var(--color-ink-soft);
+    font-size: 0.95rem;
+    line-height: 1.65;
+}
+.rc-page-meta {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.65rem;
+    margin-top: 1rem;
+}
+.rc-page-meta-item {
+    display: inline-flex;
+    align-items: baseline;
+    gap: 0.45rem;
+    padding: 0.5rem 0.72rem;
+    border-radius: 14px;
+    background: rgba(248,250,252,0.92);
+    border: 1px solid rgba(226, 232, 240, 0.95);
+    box-shadow: var(--shadow-sm);
+}
+.rc-page-meta-item .k {
+    color: var(--color-mute);
+    font-size: 0.72rem;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+}
+.rc-page-meta-item .v {
+    color: var(--color-ink);
+    font-size: 0.9rem;
+    font-weight: 700;
+}
+.rc-panel-intro {
+    margin: -0.15rem 0 0.9rem;
+}
+.rc-panel-title {
+    color: var(--color-ink);
+    font-size: 1rem;
+    font-weight: 700;
+    letter-spacing: -0.02em;
+}
+.rc-panel-sub {
+    margin: 0.24rem 0 0;
+    color: var(--color-mute);
+    font-size: 0.84rem;
+    line-height: 1.6;
+}
+.rc-empty-state {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    text-align: center;
+    gap: 0.35rem;
+    padding: 1.35rem 1rem;
+    margin: 0.4rem 0 0.15rem;
+    border: 1px dashed rgba(203, 213, 225, 0.95);
+    border-radius: 16px;
+    background:
+        radial-gradient(180px 80px at 50% 0%, rgba(212,175,55,0.08), transparent 70%),
+        rgba(248,250,252,0.72);
+}
+.rc-empty-icon {
+    width: 42px;
+    height: 42px;
+    border-radius: 14px;
+    background: linear-gradient(135deg, rgba(212,175,55,0.15), rgba(212,175,55,0.03));
+    color: var(--color-accent-700);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 1.6rem;
+    line-height: 1;
+}
+.rc-empty-title {
+    color: var(--color-ink);
+    font-size: 0.92rem;
+    font-weight: 700;
+}
+.rc-empty-body {
+    max-width: 520px;
+    color: var(--color-mute);
+    font-size: 0.84rem;
+    line-height: 1.65;
+}
+
 /* expander 标题里的金额数字稍大、用 tabular-nums 对齐 */
 .main [data-testid="stExpander"] summary {
     font-variant-numeric: tabular-nums;
@@ -676,6 +888,15 @@ div[data-testid="stMetric"] [data-testid="stMetricDelta"] {
     .block-container {
         padding: 1rem 0.9rem 2rem;
     }
+
+    .rc-page-hero {
+        padding: 1rem 1rem 1.05rem;
+        border-radius: 18px;
+    }
+
+    .rc-page-title {
+        font-size: 1.45rem;
+    }
 }
 </style>
 """
@@ -686,11 +907,11 @@ else:
 
 NAV_ITEMS = [
     "数据导入",
-    "销售员详情",
     "完成额度提成",
     "利润提成",
     "回款时效提成",
     "总提成汇总",
+    "销售员详情",
     "结余合同",
     "历史记录",
 ]

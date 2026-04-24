@@ -18,6 +18,7 @@ from dataclasses import dataclass, field
 
 _DEPT_CODE_RE = re.compile(r"^[\s]*\d[\d]*\s*\|?\s*")
 _DEPT_PREFIX_RE = re.compile(r"^[\s]*\d[\d]*\s*[-－—_]\s*")
+_AMOUNT_EPS = 0.01
 
 
 def contract_status(d_amt: float, p_amt: float) -> str:
@@ -25,6 +26,7 @@ def contract_status(d_amt: float, p_amt: float) -> str:
 
     口径与各页面保持一致：
     - 未发货 / 未发货（已收款） / 未回款 / 部分回款 / 已完成
+    - 退货 / 退款 不再体现在状态名中，仅通过“业务标记”显示
     """
     try:
         d = float(d_amt or 0)
@@ -40,6 +42,133 @@ def contract_status(d_amt: float, p_amt: float) -> str:
     if p + 1e-2 >= d:
         return "已完成"
     return "部分回款"
+
+
+def delivery_business_type(amount: float) -> str:
+    try:
+        v = float(amount or 0)
+    except (TypeError, ValueError):
+        return "发货"
+    if v < -_AMOUNT_EPS:
+        return "退货"
+    return "发货"
+
+
+def payment_business_type(amount: float) -> str:
+    try:
+        v = float(amount or 0)
+    except (TypeError, ValueError):
+        return "回款"
+    if v < -_AMOUNT_EPS:
+        return "退款"
+    return "回款"
+
+
+def annotate_delivery_business_type(
+    df: pd.DataFrame | None,
+    amount_col: str = "发货金额",
+    kind_col: str = "业务类型",
+) -> pd.DataFrame:
+    if df is None:
+        return pd.DataFrame()
+    out = df.copy()
+    if amount_col in out.columns:
+        amounts = pd.to_numeric(out[amount_col], errors="coerce").fillna(0)
+        inferred = amounts.map(delivery_business_type)
+        if kind_col in out.columns:
+            existing = out[kind_col].astype("string")
+            mask = existing.isna() | existing.str.strip().isin(["", "nan", "None"])
+            out.loc[mask, kind_col] = inferred.loc[mask]
+            out.loc[~mask, kind_col] = existing.loc[~mask]
+        else:
+            out[kind_col] = inferred
+    return out
+
+
+def annotate_payment_business_type(
+    df: pd.DataFrame | None,
+    amount_col: str = "回款金额",
+    kind_col: str = "业务类型",
+) -> pd.DataFrame:
+    if df is None:
+        return pd.DataFrame()
+    out = df.copy()
+    if amount_col in out.columns:
+        amounts = pd.to_numeric(out[amount_col], errors="coerce").fillna(0)
+        inferred = amounts.map(payment_business_type)
+        if kind_col in out.columns:
+            existing = out[kind_col].astype("string")
+            mask = existing.isna() | existing.str.strip().isin(["", "nan", "None"])
+            out.loc[mask, kind_col] = inferred.loc[mask]
+            out.loc[~mask, kind_col] = existing.loc[~mask]
+        else:
+            out[kind_col] = inferred
+    return out
+
+
+def extract_isolated_returns(delivery_df: pd.DataFrame | None) -> pd.DataFrame:
+    """识别"只有退货、找不到历史正发货可冲销"的孤立退货。
+
+    口径：
+    - 仅在同一 销售员 + 合同编号 内判断。
+    - 只允许用"更早出现的正发货"抵扣后续退货。
+    - 退货若超过当前可追溯的正发货余额，超出的部分记为孤立退货。
+    """
+    cols = [
+        "销售员", "销售部门", "合同编号", "主合同编号",
+        "发货日期", "发货金额", "孤立退货金额",
+        "订货单位", "开票单位", "业务类型",
+    ]
+    if delivery_df is None or delivery_df.empty:
+        return pd.DataFrame(columns=cols)
+
+    work = annotate_delivery_business_type(delivery_df)
+    work = work.copy()
+    work["_row_order"] = range(len(work))
+    if "发货日期" in work.columns:
+        work["发货日期"] = pd.to_datetime(work["发货日期"], errors="coerce")
+    else:
+        work["发货日期"] = pd.NaT
+
+    rows: list[dict] = []
+    for (sp, pid), grp in work.sort_values(
+        ["销售员", "合同编号", "发货日期", "_row_order"],
+        kind="stable",
+    ).groupby(["销售员", "合同编号"], sort=False):
+        positive_pool: list[float] = []
+        for _, r in grp.iterrows():
+            amt = float(pd.to_numeric(r.get("发货金额", 0), errors="coerce") or 0)
+            if amt > _AMOUNT_EPS:
+                positive_pool.append(amt)
+                continue
+            if amt >= -_AMOUNT_EPS:
+                continue
+
+            need = -amt
+            while need > _AMOUNT_EPS and positive_pool:
+                take = min(need, positive_pool[0])
+                positive_pool[0] -= take
+                if positive_pool[0] <= _AMOUNT_EPS:
+                    positive_pool.pop(0)
+                need -= take
+
+            if need <= _AMOUNT_EPS:
+                continue
+
+            rows.append({
+                "销售员": str(sp),
+                "销售部门": str(r.get("销售部门", "") or ""),
+                "合同编号": str(pid),
+                "主合同编号": str(r.get("主合同编号", pid) or pid),
+                "发货日期": r.get("发货日期"),
+                "发货金额": round(float(amt), 2),
+                "孤立退货金额": round(-need, 2),
+                "订货单位": str(r.get("订货单位", "") or ""),
+                "开票单位": str(r.get("开票单位", "") or ""),
+                "业务类型": "孤立退货",
+            })
+
+    return pd.DataFrame(rows, columns=cols)
 
 
 def clean_dept_name(value) -> str:
@@ -229,6 +358,7 @@ def load_delivery_excel(path: str) -> pd.DataFrame:
     df["发货金额"] = pd.to_numeric(df["发货金额"], errors="coerce").fillna(0)
     df["发货日期"] = pd.to_datetime(df["发货日期"], errors="coerce")
     df = _normalize_dept_column(df)
+    df = annotate_delivery_business_type(df)
     return df.reset_index(drop=True)
 
 
@@ -285,6 +415,7 @@ def load_payment_excel(path: str) -> pd.DataFrame:
         df["核销金额"] = pd.to_numeric(df["核销金额"], errors="coerce").fillna(0)
     df["回款日期"] = pd.to_datetime(df["回款日期"], errors="coerce")
     df = _normalize_dept_column(df)
+    df = annotate_payment_business_type(df)
     return df.reset_index(drop=True)
 
 
@@ -608,29 +739,41 @@ def build_contract_overview(delivery_df: pd.DataFrame | None,
     rows = []
     for pid in sorted(pids):
         d_lines = d_amt = 0
+        has_return = False
         if delivery_df is not None and not delivery_df.empty and "合同编号" in delivery_df.columns:
             m = delivery_df["合同编号"].astype(str) == pid
             d_lines = int(m.sum())
             if "发货金额" in delivery_df.columns:
-                d_amt = float(delivery_df.loc[m, "发货金额"].sum())
+                d_vals = pd.to_numeric(delivery_df.loc[m, "发货金额"], errors="coerce").fillna(0)
+                d_amt = float(d_vals.sum())
+                has_return = bool((d_vals < -_AMOUNT_EPS).any())
         p_lines = p_amt = 0
+        has_refund = False
         if payment_df is not None and not payment_df.empty and "合同编号" in payment_df.columns:
             m = payment_df["合同编号"].astype(str) == pid
             p_lines = int(m.sum())
             if "回款金额" in payment_df.columns:
-                p_amt = float(payment_df.loc[m, "回款金额"].sum())
+                p_vals = pd.to_numeric(payment_df.loc[m, "回款金额"], errors="coerce").fillna(0)
+                p_amt = float(p_vals.sum())
+                has_refund = bool((p_vals < -_AMOUNT_EPS).any())
         if d_lines > 0 and p_lines > 0:
             tag = "交货与回款均有"
         elif d_lines > 0:
             tag = "仅交货明细"
         else:
             tag = "仅回款明细"
+        business_flags = []
+        if has_return:
+            business_flags.append("有退货")
+        if has_refund:
+            business_flags.append("有退款")
         rows.append({
             "合同编号": pid,
             "交货行数": d_lines,
             "交货金额合计": round(d_amt, 2),
             "回款行数": p_lines,
             "回款金额合计": round(p_amt, 2),
+            "业务标记": " / ".join(business_flags),
             "数据情况": tag,
         })
     return pd.DataFrame(rows)
@@ -702,7 +845,7 @@ def build_salesperson_detail(
     tl_amount: dict[str, float] = {}
     if timeliness_df is not None and not timeliness_df.empty and "销售员" in timeliness_df.columns:
         sub = timeliness_df[timeliness_df["销售员"].astype(str) == salesperson]
-        cols_pref = ["回款日期", "回款金额", "匹配发货日期", "回款周期(天)",
+        cols_pref = ["回款日期", "业务类型", "回款金额", "匹配发货日期", "回款周期(天)",
                      "时效提成比例", "时效提成金额"]
         for pid, grp in sub.groupby(sub["合同编号"].astype(str)):
             keep = [c for c in cols_pref if c in grp.columns]
@@ -718,13 +861,16 @@ def build_salesperson_detail(
     del_rows = (
         delivery_df[delivery_df["销售员"].astype(str) == salesperson].copy()
         if delivery_df is not None and not delivery_df.empty and "销售员" in delivery_df.columns
-        else _empty(["合同编号", "发货日期", "发货金额", "订货单位", "开票单位"])
+        else _empty(["合同编号", "发货日期", "业务类型", "发货金额", "订货单位", "开票单位"])
     )
     pay_rows = (
         payment_df[payment_df["销售员"].astype(str) == salesperson].copy()
         if payment_df is not None and not payment_df.empty and "销售员" in payment_df.columns
-        else _empty(["合同编号", "回款日期", "回款金额", "开票单位", "核销金额"])
+        else _empty(["合同编号", "回款日期", "业务类型", "回款金额", "开票单位", "核销金额"])
     )
+
+    del_rows = annotate_delivery_business_type(del_rows)
+    pay_rows = annotate_payment_business_type(pay_rows)
 
     if "发货日期" in del_rows.columns:
         del_rows["发货日期"] = pd.to_datetime(del_rows["发货日期"], errors="coerce")
@@ -745,8 +891,8 @@ def build_salesperson_detail(
     def _order_key(pid: str):
         return (1 if pid == "其他" else 0, pid)
 
-    empty_del = _empty(["发货日期", "发货金额", "订货单位", "开票单位"])
-    empty_pay = _empty(["回款日期", "回款金额", "开票单位", "核销金额"])
+    empty_del = _empty(["发货日期", "业务类型", "发货金额", "订货单位", "开票单位"])
+    empty_pay = _empty(["回款日期", "业务类型", "回款金额", "开票单位", "核销金额"])
 
     contracts = []
     total_del = total_pay = 0.0
@@ -758,6 +904,12 @@ def build_salesperson_detail(
         p_amt = float(p["回款金额"].sum()) if "回款金额" in p.columns else 0.0
         total_del += d_amt
         total_pay += p_amt
+
+        business_flags: list[str] = []
+        if "业务类型" in d.columns and d["业务类型"].astype(str).eq("退货").any():
+            business_flags.append("有退货")
+        if "业务类型" in p.columns and p["业务类型"].astype(str).eq("退款").any():
+            business_flags.append("有退款")
 
         status = contract_status(d_amt, p_amt)
 
@@ -800,8 +952,8 @@ def build_salesperson_detail(
         p = _fill_missing(p, "订货单位", cust_list)
         p = _fill_missing(p, "开票单位", inv_list)
 
-        d_cols = [c for c in ["发货日期", "发货金额", "订货单位", "开票单位"] if c in d.columns]
-        p_cols = [c for c in ["回款日期", "回款金额", "核销金额", "开票单位", "订货单位"]
+        d_cols = [c for c in ["发货日期", "业务类型", "发货金额", "订货单位", "开票单位"] if c in d.columns]
+        p_cols = [c for c in ["回款日期", "业务类型", "回款金额", "核销金额", "开票单位", "订货单位"]
                   if c in p.columns]
 
         d_show = d[d_cols].sort_values("发货日期") if "发货日期" in d_cols else d[d_cols]
@@ -817,6 +969,7 @@ def build_salesperson_detail(
             "发货额": round(d_amt, 2),
             "回款额": round(p_amt, 2),
             "未回款额": round(max(d_amt - p_amt, 0), 2),
+            "业务标记": " / ".join(business_flags),
             "状态": status,
             "利润提成": prof.get("利润提成", 0.0),
             "利润提成率": prof.get("利润提成率", ""),
@@ -914,7 +1067,7 @@ def calc_quota_commission_by_dept(delivery_df: pd.DataFrame,
             "部门目标额(万元)": round(target_wan, 2),
             "部门完成比": f"{ratio_pct:.1f}%",
             "提成比例": f"{rate*100:.2f}%",
-            "完成额度提成(元)": round(r["个人回款额"] * rate, 2),
+            "完成额度提成(元)": round(float(r["个人回款额"]) * rate, 2),
         })
 
     return pd.DataFrame(rows) if rows else pd.DataFrame()
@@ -959,6 +1112,24 @@ def calc_profit_commission(delivery_df: pd.DataFrame,
     )
     del_grp.columns = ["销售员", "合同编号", "合同发货额"]
 
+    neg_delivery_keys: set[tuple[str, str]] = set()
+    if delivery_df is not None and not delivery_df.empty:
+        neg_del = delivery_df.groupby(["销售员", "合同编号"])["发货金额"].apply(
+            lambda s: bool((pd.to_numeric(s, errors="coerce").fillna(0) < -_AMOUNT_EPS).any())
+        )
+        neg_delivery_keys = {
+            (str(sp), str(pid)) for (sp, pid), has_neg in neg_del.items() if has_neg
+        }
+
+    neg_payment_keys: set[tuple[str, str]] = set()
+    if payment_df is not None and not payment_df.empty:
+        neg_pay = payment_df.groupby(["销售员", "合同编号"])["回款金额"].apply(
+            lambda s: bool((pd.to_numeric(s, errors="coerce").fillna(0) < -_AMOUNT_EPS).any())
+        )
+        neg_payment_keys = {
+            (str(sp), str(pid)) for (sp, pid), has_neg in neg_pay.items() if has_neg
+        }
+
     contracts = pd.merge(del_grp, pay_grp, on=["销售员", "合同编号"], how="outer").fillna(0)
 
     def _resolve_pricing(pid: str) -> tuple[ContractPricing | None, str, str]:
@@ -988,6 +1159,11 @@ def calc_profit_commission(delivery_df: pd.DataFrame,
         d_amt = float(r["合同发货额"])
         p_amt = float(r["合同回款额"])
         status = contract_status(d_amt, p_amt)
+        business_flags: list[str] = []
+        if (str(r["销售员"]), pid) in neg_delivery_keys:
+            business_flags.append("有退货")
+        if (str(r["销售员"]), pid) in neg_payment_keys:
+            business_flags.append("有退款")
 
         pricing, main_pid, src = _resolve_pricing(pid)
 
@@ -998,6 +1174,7 @@ def calc_profit_commission(delivery_df: pd.DataFrame,
             "销售部门": dept_map.get(r["销售员"], ""),
             "合同发货额": round(d_amt, 2),
             "合同回款额": round(p_amt, 2),
+            "业务标记": " / ".join(business_flags),
             "状态": status,
         }
 
@@ -1054,12 +1231,15 @@ def calc_payment_timeliness(delivery_df: pd.DataFrame,
 
     delivery_df = delivery_df.copy()
     payment_df = payment_df.copy()
+    delivery_df = annotate_delivery_business_type(delivery_df)
+    payment_df = annotate_payment_business_type(payment_df)
     if "发货日期" in delivery_df.columns:
         delivery_df["发货日期"] = pd.to_datetime(delivery_df["发货日期"], errors="coerce")
     if "回款日期" in payment_df.columns:
         payment_df["回款日期"] = pd.to_datetime(payment_df["回款日期"], errors="coerce")
 
     dept_map = _build_salesperson_dept_map(delivery_df, payment_df)
+    isolated_returns = extract_isolated_returns(delivery_df)
 
     # ── 出库明细 ──
     del_detail = delivery_df.copy()
@@ -1101,6 +1281,7 @@ def calc_payment_timeliness(delivery_df: pd.DataFrame,
                     "合同编号": project, "销售员": salesperson, "销售部门": dept,
                     "回款金额": round(pr["回款金额"], 2), "回款日期": pr["回款日期"],
                     "匹配发货日期": None, "回款周期(天)": None,
+                    "业务类型": payment_business_type(pr["回款金额"]),
                     "时效提成比例": "无匹配发货", "时效提成金额": 0,
                 })
             continue
@@ -1141,6 +1322,7 @@ def calc_payment_timeliness(delivery_df: pd.DataFrame,
                         "合同编号": project, "销售员": salesperson, "销售部门": dept,
                         "回款金额": round(matched, 2), "回款日期": pay_date,
                         "匹配发货日期": d_date, "回款周期(天)": cycle,
+                        "业务类型": "回款",
                         "时效提成比例": f"{rate*100:.4f}%",
                         "时效提成金额": round(matched * rate, 2),
                     })
@@ -1156,6 +1338,7 @@ def calc_payment_timeliness(delivery_df: pd.DataFrame,
                         "合同编号": project, "销售员": salesperson, "销售部门": dept,
                         "回款金额": round(pay_amount, 2), "回款日期": pay_date,
                         "匹配发货日期": None, "回款周期(天)": None,
+                        "业务类型": "回款",
                         "时效提成比例": "超出发货额", "时效提成金额": 0,
                     })
 
@@ -1175,6 +1358,7 @@ def calc_payment_timeliness(delivery_df: pd.DataFrame,
                         "合同编号": project, "销售员": salesperson, "销售部门": dept,
                         "回款金额": round(-take, 2), "回款日期": pay_date,
                         "匹配发货日期": d_date, "回款周期(天)": cycle,
+                        "业务类型": "退款",
                         "时效提成比例": f"{rate*100:.4f}% (退款冲销)",
                         "时效提成金额": round(-take * rate, 2),
                     })
@@ -1190,8 +1374,24 @@ def calc_payment_timeliness(delivery_df: pd.DataFrame,
                         "合同编号": project, "销售员": salesperson, "销售部门": dept,
                         "回款金额": round(-need, 2), "回款日期": pay_date,
                         "匹配发货日期": None, "回款周期(天)": None,
+                        "业务类型": "退款",
                         "时效提成比例": "无可冲销记录", "时效提成金额": 0,
                     })
+
+    if not isolated_returns.empty:
+        for _, r in isolated_returns.iterrows():
+            timeliness_rows.append({
+                "合同编号": str(r.get("合同编号", "") or ""),
+                "销售员": str(r.get("销售员", "") or ""),
+                "销售部门": str(r.get("销售部门", "") or dept_map.get(str(r.get("销售员", "") or ""), "")),
+                "回款金额": round(float(r.get("孤立退货金额", 0) or 0), 2),
+                "回款日期": r.get("发货日期"),
+                "匹配发货日期": None,
+                "回款周期(天)": None,
+                "业务类型": "孤立退货",
+                "时效提成比例": "孤立退货（无历史发货）",
+                "时效提成金额": 0.0,
+            })
 
     timeliness_df = pd.DataFrame(timeliness_rows) if timeliness_rows else pd.DataFrame()
     return timeliness_df, del_summary, pay_summary

@@ -17,7 +17,11 @@ from pathlib import Path
 import pandas as pd
 import streamlit as st
 
-from engine.calculator import contract_status as _status_of
+from engine.calculator import (
+    annotate_delivery_business_type,
+    annotate_payment_business_type,
+    contract_status as _status_of,
+)
 from web._cache import (
     bump_data_version,
     get_invoice_units_by_contract,
@@ -26,12 +30,12 @@ from web._cache import (
     session_cache,
 )
 from web._download import render_df_download_buttons
-from web._ui import fmt_money, section_title
+from web._ui import fmt_money, section_title, page_intro, empty_state
 
 
 _BAL_COLS = [
     "销售员", "销售部门", "合同编号", "主合同编号", "开票单位",
-    "累计发货额", "累计回款额", "结余金额",
+    "累计发货额", "累计回款额", "结余金额", "业务标记",
     "状态", "最近发货日期", "最近回款日期",
 ]
 
@@ -61,6 +65,7 @@ def _build_balance_df(
             key = (str(pid), str(sp))
             rows.setdefault(key, {})
             rows[key]["累计发货额"] = float(g["发货金额"].sum())
+            rows[key]["含退货"] = bool((g["发货金额"] < -0.01).any())
             if "发货日期" in g.columns:
                 last = pd.to_datetime(g["发货日期"], errors="coerce").max()
                 rows[key]["最近发货日期"] = last if pd.notna(last) else None
@@ -76,6 +81,7 @@ def _build_balance_df(
             key = (str(pid), str(sp))
             rows.setdefault(key, {})
             rows[key]["累计回款额"] = float(g["回款金额"].sum())
+            rows[key]["含退款"] = bool((g["回款金额"] < -0.01).any())
             if "回款日期" in g.columns:
                 last = pd.to_datetime(g["回款日期"], errors="coerce").max()
                 rows[key]["最近回款日期"] = last if pd.notna(last) else None
@@ -97,6 +103,11 @@ def _build_balance_df(
         p = round(v.get("累计回款额", 0.0), 2)
         if abs(d - p) < 0.005:
             continue  # 结清的跳过
+        business_flags = []
+        if v.get("含退货"):
+            business_flags.append("有退货")
+        if v.get("含退款"):
+            business_flags.append("有退款")
         out.append({
             "销售员": sp,
             "销售部门": dept_map.get(sp, ""),
@@ -106,6 +117,7 @@ def _build_balance_df(
             "累计发货额": d,
             "累计回款额": p,
             "结余金额": round(d - p, 2),
+            "业务标记": " / ".join(business_flags),
             "状态": _status_of(d, p),
             "最近发货日期": v.get("最近发货日期"),
             "最近回款日期": v.get("最近回款日期"),
@@ -243,7 +255,7 @@ def _apply_opening_to_session(
             })
 
     if d_new_rows:
-        d_add = pd.DataFrame(d_new_rows)
+        d_add = annotate_delivery_business_type(pd.DataFrame(d_new_rows))
         if delivery is None or delivery.empty:
             st.session_state["delivery_df"] = d_add
         else:
@@ -254,7 +266,7 @@ def _apply_opening_to_session(
             )
 
     if p_new_rows:
-        p_add = pd.DataFrame(p_new_rows)
+        p_add = annotate_payment_business_type(pd.DataFrame(p_new_rows))
         if payment is None or payment.empty:
             st.session_state["payment_df"] = p_add
         else:
@@ -379,7 +391,11 @@ def render_opening_balance_import() -> None:
 
 
 def render_balance(username: str):
-    st.header("结余合同")
+    st.html(page_intro(
+        "结余合同",
+        "聚焦所有未结清合同，适合核对期初结余、应收余额以及预收回款的承接情况。",
+        eyebrow="Balance Ledger",
+    ))
 
     delivery_df = st.session_state.get("delivery_df")
     payment_df = st.session_state.get("payment_df")
@@ -402,7 +418,7 @@ def render_balance(username: str):
         st.subheader("未结清合同清单")
 
         if bal.empty:
-            st.success("🎉 当前所有合同都已结清。")
+            st.html(empty_state("当前所有合同都已结清", "本期没有剩余应收或预收合同，可以直接导出留档。"))
             return
 
         total_n = len(bal)

@@ -15,6 +15,7 @@ from engine.calculator import (
 from db.database import save_import_snapshots
 from web._cache import bump_data_version, get_project_list, get_contract_overview
 from web.page_balance import render_opening_balance_import
+from web._ui import page_intro, panel_intro
 
 
 def _upload_and_load(
@@ -55,13 +56,26 @@ def _upload_and_load(
 
 
 def render_import(username: str):
-    st.header("数据导入")
+    dd = st.session_state.get("delivery_df")
+    pd_df = st.session_state.get("payment_df")
+    n_union = len(get_project_list())
+
+    st.html(page_intro(
+        "数据导入",
+        "上传交货、回款与期初结余数据，系统会自动刷新合同视图，并保留退货与退款的业务语义。",
+        eyebrow="Data Intake",
+        meta=[
+            ("交货数据", "已导入" if dd is not None else "待上传"),
+            ("回款数据", "已导入" if pd_df is not None else "待上传"),
+            ("合同去重", f"{n_union} 个"),
+        ],
+    ))
 
     col1, col2 = st.columns(2, gap="large")
 
     with col1:
         with st.container(border=True):
-            st.subheader("交货数据")
+            st.html(panel_intro("交货数据", "支持 Excel / CSV，导入后会自动识别负交货并标记为退货。"))
             _upload_and_load(
                 "上传交货单 Excel",
                 "delivery_uploader",
@@ -73,7 +87,7 @@ def render_import(username: str):
 
     with col2:
         with st.container(border=True):
-            st.subheader("回款数据")
+            st.html(panel_intro("回款数据", "支持 Excel / CSV，负回款会保留为退款记录并参与后续计算。"))
             _upload_and_load(
                 "上传回款单 Excel",
                 "payment_uploader",
@@ -91,10 +105,7 @@ def render_import(username: str):
     with c2:
         status = "已导入" if st.session_state.get("payment_df") is not None else "未导入"
         st.metric("回款数据", status)
-    dd = st.session_state.get("delivery_df")
-    pd_df = st.session_state.get("payment_df")
     with c3:
-        n_union = len(get_project_list())
         st.metric("合同编号（去重）", f"{n_union} 个")
 
     if dd is not None or pd_df is not None:
@@ -102,10 +113,10 @@ def render_import(username: str):
         if overview is not None and not overview.empty:
             st.markdown("")
             with st.container(border=True):
-                st.subheader("合同编号汇总")
+                st.html(panel_intro("合同编号汇总", "用于快速检查导入结果是否存在仅交货、仅回款、含退货或含退款的合同。"))
                 st.dataframe(overview, width="stretch", height=min(400, 35 + len(overview) * 36))
 
         st.markdown("")
         with st.container(border=True):
-            st.subheader("期初结余（可选）")
+            st.html(panel_intro("期初结余（可选）", "适合承接上期未结清合同，让历史余额继续参与本期的结余与提成计算。"))
             render_opening_balance_import()
