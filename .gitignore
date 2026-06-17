@@ -1,0 +1,29 @@
+__pycache__/
+*.pyc
+*.pyo
+data/
+*.db
+.env
+.venv/
+venv/
+*.egg-info/
+dist/
+build/
+.idea/
+.vscode/
+*.log
+
+# Node / Electron 残留
+node_modules/
+package.json
+package-lock.json
+
+# pytest 缓存
+.pytest_cache/
+.codex/
+
+# Claude Code 本机设置（个人/机器相关，不入库）
+.claude/settings.local.json
+
+# Windows 缩略图
+Thumbs.db

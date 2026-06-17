@@ -1,0 +1,8 @@
+streamlit
+streamlit-authenticator
+sqlalchemy
+psycopg2-binary
+pandas
+openpyxl
+xlrd
+bcrypt
