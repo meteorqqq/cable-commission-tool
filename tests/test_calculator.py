@@ -658,6 +658,40 @@ def test_calc_payment_timeliness_same_day_return_cancels_delivery():
     assert matched.iloc[0]["回款周期(天)"] == 35
 
 
+def test_calc_payment_timeliness_prepayment_floors_cycle_to_zero():
+    """回款早于发货（预收款）：周期封底为 0 天、按最快档计，不出现负周期。
+
+    回归：郭可新 RYDB251201023——退货修复后，04-24 回款超出当日及以前发货的
+    部分会顺延匹配到 04-25 的发货，此前周期算成 -1 天且误命中最高档。
+    """
+    d = pd.DataFrame([
+        {"销售员": "X", "销售部门": "D", "合同编号": "C",
+         "发货日期": pd.Timestamp("2026-03-20"), "发货金额": 500000.0,
+         "订货单位": "u", "开票单位": "u"},
+        {"销售员": "X", "销售部门": "D", "合同编号": "C",
+         "发货日期": pd.Timestamp("2026-04-25"), "发货金额": 1000000.0,
+         "订货单位": "u", "开票单位": "u"},
+    ])
+    p = pd.DataFrame([
+        {"销售员": "X", "销售部门": "D", "合同编号": "C",
+         "回款日期": pd.Timestamp("2026-04-24"), "回款金额": 1200000.0,
+         "核销金额": 1200000.0, "开票单位": "u"},
+    ])
+    tl, _, _ = calc_payment_timeliness(d, p)
+    m = tl[tl["匹配发货日期"].notna()].sort_values("匹配发货日期").reset_index(drop=True)
+    assert len(m) == 2
+    # 正常那笔：35 天
+    normal = m[m["匹配发货日期"] == pd.Timestamp("2026-03-20")].iloc[0]
+    assert normal["回款周期(天)"] == 35
+    # 预收那笔：发货(04-25)晚于回款(04-24)，周期封底为 0，绝不为负
+    pre = m[m["匹配发货日期"] == pd.Timestamp("2026-04-25")].iloc[0]
+    assert pre["回款周期(天)"] == 0
+    assert (tl["回款周期(天)"].dropna() >= 0).all()
+    # 0 天命中 ≤30 天最快档 0.2400%
+    assert "0.2400%" in str(pre["时效提成比例"])
+    assert pre["时效提成金额"] == round(700000.0 * 0.0024, 2)
+
+
 def test_calc_payment_timeliness_generates_isolated_return_placeholder():
     d = pd.DataFrame([
         {"销售员": "钱八", "销售部门": "销售部", "合同编号": "C12",

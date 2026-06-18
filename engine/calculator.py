@@ -1498,7 +1498,12 @@ def calc_payment_timeliness(delivery_df: pd.DataFrame,
                     matched = min(pay_amount, d_remain)
 
                     if pd.notna(pay_date) and pd.notna(d_date):
-                        cycle = (pd.Timestamp(pay_date) - pd.Timestamp(d_date)).days
+                        # 回款早于发货（预收款）时差值为负：按口径封底为 0 天，
+                        # 视同"回款最快"档计提，避免负周期意外命中并奖励最高档，
+                        # 界面也不再出现 -1 天这种异常值。
+                        cycle = max(
+                            (pd.Timestamp(pay_date) - pd.Timestamp(d_date)).days, 0
+                        )
                     else:
                         cycle = None
 
