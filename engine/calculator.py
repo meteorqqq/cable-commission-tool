@@ -106,13 +106,72 @@ def annotate_payment_business_type(
     return out
 
 
+def _net_deliveries_by_amount(
+    items: list[tuple],
+) -> tuple[list[list], list[tuple]]:
+    """对一个 (销售员, 合同编号) 组内的发货行做"按金额对应"的退货冲销。
+
+    ``items``: ``[(发货日期, 发货金额, 行序), ...]``，发货金额可正可负（负为退货）。
+
+    口径（"退货对冲对应发货，而非最早发货"）：
+      1. 退货优先冲销"金额与退货金额相同"的正发货；同额有多笔时，先同一
+         发货日期、再发货日期最近、再行序靠前，整笔抵销该笔发货。
+      2. 找不到同额正发货时，回落到发货日期最近（同日优先）的正发货按比例
+         消耗，允许部分冲销。
+      3. 仍冲不掉的退货剩余记为孤立退货。
+
+    返回 ``(net_positives, isolated)``：
+      - ``net_positives``：``[[发货日期, 剩余金额, 行序], ...]``（剩余>eps，按日期+行序升序）
+      - ``isolated``：``[(发货日期, 负数金额, 行序), ...]`` 无法冲销的退货剩余
+    """
+    positives = [[d, float(a), o] for (d, a, o) in items if float(a) > _AMOUNT_EPS]
+    returns = [(d, float(a), o) for (d, a, o) in items if float(a) < -_AMOUNT_EPS]
+    isolated: list[tuple] = []
+
+    def _rank(p, r_date):
+        p_date = p[0]
+        both = pd.notna(p_date) and pd.notna(r_date)
+        same = 0 if (both and pd.Timestamp(p_date) == pd.Timestamp(r_date)) else 1
+        dist = (abs((pd.Timestamp(p_date) - pd.Timestamp(r_date)).days)
+                if both else 10 ** 9)
+        return (same, dist, p[2])
+
+    for r_date, r_amt, r_order in returns:
+        need = -r_amt
+        # ① 同额整笔冲销：金额与退货相同的正发货（同日/最近日期优先）
+        exact = [p for p in positives
+                 if p[1] > _AMOUNT_EPS and abs(p[1] - need) <= _AMOUNT_EPS]
+        if exact:
+            exact.sort(key=lambda p: _rank(p, r_date))
+            exact[0][1] = 0.0
+            continue
+        # ② 回落：按发货日期最近（同日优先）的正发货部分消耗
+        avail = sorted((p for p in positives if p[1] > _AMOUNT_EPS),
+                       key=lambda p: _rank(p, r_date))
+        for p in avail:
+            if need <= _AMOUNT_EPS:
+                break
+            take = min(need, p[1])
+            p[1] -= take
+            need -= take
+        if need > _AMOUNT_EPS:
+            isolated.append((r_date, round(-need, 2), r_order))
+
+    net_positives = [p for p in positives if p[1] > _AMOUNT_EPS]
+    net_positives.sort(
+        key=lambda p: (pd.Timestamp(p[0]) if pd.notna(p[0]) else pd.Timestamp.max, p[2])
+    )
+    return net_positives, isolated
+
+
 def extract_isolated_returns(delivery_df: pd.DataFrame | None) -> pd.DataFrame:
-    """识别"只有退货、找不到历史正发货可冲销"的孤立退货。
+    """识别"找不到对应正发货可冲销"的孤立退货。
 
     口径：
     - 仅在同一 销售员 + 合同编号 内判断。
-    - 只允许用"更早出现的正发货"抵扣后续退货。
-    - 退货若超过当前可追溯的正发货余额，超出的部分记为孤立退货。
+    - 退货按"金额对应"冲销正发货（见 :func:`_net_deliveries_by_amount`）：优先
+      冲销同额发货、其次同日 / 最近日期；找不到同额时按最近日期部分消耗。
+    - 冲不掉的退货剩余记为孤立退货。
     """
     cols = [
         "销售员", "销售部门", "合同编号", "主合同编号",
@@ -131,38 +190,28 @@ def extract_isolated_returns(delivery_df: pd.DataFrame | None) -> pd.DataFrame:
         work["发货日期"] = pd.NaT
 
     rows: list[dict] = []
-    for (sp, pid), grp in work.sort_values(
-        ["销售员", "合同编号", "发货日期", "_row_order"],
-        kind="stable",
-    ).groupby(["销售员", "合同编号"], sort=False):
-        positive_pool: list[float] = []
-        for _, r in grp.iterrows():
-            amt = float(pd.to_numeric(r.get("发货金额", 0), errors="coerce") or 0)
-            if amt > _AMOUNT_EPS:
-                positive_pool.append(amt)
-                continue
-            if amt >= -_AMOUNT_EPS:
-                continue
-
-            need = -amt
-            while need > _AMOUNT_EPS and positive_pool:
-                take = min(need, positive_pool[0])
-                positive_pool[0] -= take
-                if positive_pool[0] <= _AMOUNT_EPS:
-                    positive_pool.pop(0)
-                need -= take
-
-            if need <= _AMOUNT_EPS:
-                continue
-
+    for (sp, pid), grp in work.groupby(["销售员", "合同编号"], sort=False):
+        items = [
+            (r["发货日期"],
+             float(pd.to_numeric(r.get("发货金额", 0), errors="coerce") or 0),
+             int(r["_row_order"]))
+            for _, r in grp.iterrows()
+        ]
+        _net, isolated = _net_deliveries_by_amount(items)
+        if not isolated:
+            continue
+        row_by_order = {int(r["_row_order"]): r for _, r in grp.iterrows()}
+        for r_date, iso_amt, r_order in isolated:
+            r = row_by_order[r_order]
+            full_amt = float(pd.to_numeric(r.get("发货金额", 0), errors="coerce") or 0)
             rows.append({
                 "销售员": str(sp),
                 "销售部门": str(r.get("销售部门", "") or ""),
                 "合同编号": str(pid),
                 "主合同编号": str(r.get("主合同编号", pid) or pid),
-                "发货日期": r.get("发货日期"),
-                "发货金额": round(float(amt), 2),
-                "孤立退货金额": round(-need, 2),
+                "发货日期": r_date,
+                "发货金额": round(full_amt, 2),
+                "孤立退货金额": round(float(iso_amt), 2),
                 "订货单位": str(r.get("订货单位", "") or ""),
                 "开票单位": str(r.get("开票单位", "") or ""),
                 "业务类型": "孤立退货",
@@ -1458,24 +1507,18 @@ def calc_payment_timeliness(delivery_df: pd.DataFrame,
                 })
             continue
 
-        # 构建 FIFO 发货池：正发货入池，退货先冲减"更早出现的正发货"（与
-        # extract_isolated_returns 同口径），冲减后的"净发货"才参与回款时效匹配。
-        # 这样被退货全额抵销的发货不会再吸走回款，回款自然顺延到后续真实发货。
-        # 退货超出可追溯正发货的部分为孤立退货，已由 extract_isolated_returns
-        # 单独列出，此处忽略，不影响后续正发货。
-        del_remaining: list[list] = []
-        for d_date, d_amt in grp_del[["发货日期", "发货金额"]].values.tolist():
-            amt = float(d_amt)
-            if amt > _AMOUNT_EPS:
-                del_remaining.append([d_date, amt])
-            elif amt < -_AMOUNT_EPS:
-                need = -amt
-                while need > _AMOUNT_EPS and del_remaining:
-                    take = min(need, del_remaining[0][1])
-                    del_remaining[0][1] -= take
-                    need -= take
-                    if del_remaining[0][1] <= _AMOUNT_EPS:
-                        del_remaining.pop(0)
+        # 构建发货池：退货按"金额对应"冲销正发货（优先同额、其次同日 / 最近日期，
+        # 见 _net_deliveries_by_amount），冲减后的"净发货"按发货日期参与回款时效
+        # 匹配。这样退货只抵销它真正对应的那笔发货，不会误吃最早的发货、把回款
+        # 推到更晚的发货上。退货冲不掉的剩余为孤立退货，已由 extract_isolated_returns
+        # 单独列出，此处忽略。
+        _net_pos, _ = _net_deliveries_by_amount([
+            (d_date, float(d_amt), idx)
+            for idx, (d_date, d_amt) in enumerate(
+                grp_del[["发货日期", "发货金额"]].values.tolist()
+            )
+        ])
+        del_remaining: list[list] = [[d, amt] for d, amt, _o in _net_pos]
         del_idx = 0
 
         # 已匹配历史栈（供负回款 LIFO 冲销用）

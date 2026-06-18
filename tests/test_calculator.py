@@ -692,6 +692,39 @@ def test_calc_payment_timeliness_prepayment_floors_cycle_to_zero():
     assert pre["时效提成金额"] == round(700000.0 * 0.0024, 2)
 
 
+def test_calc_payment_timeliness_return_offsets_matching_delivery_not_earliest():
+    """退货按金额对应：冲销同额（同日优先）的那笔发货，而不是最早的发货。
+
+    回归：郭可新 RYDB251201023 中出现的 87750 零头与回款被挤到更晚发货——
+    退货应冲它对应的那笔发货；旧"冲最早发货"口径会误吃 03-20、把回款推到
+    04-25 上（甚至产生负周期）。
+    """
+    d = pd.DataFrame([
+        {"销售员": "X", "销售部门": "D", "合同编号": "C",
+         "发货日期": pd.Timestamp("2026-03-20"), "发货金额": 585000.0,
+         "订货单位": "u", "开票单位": "u"},
+        {"销售员": "X", "销售部门": "D", "合同编号": "C",
+         "发货日期": pd.Timestamp("2026-04-25"), "发货金额": 585000.0,
+         "订货单位": "u", "开票单位": "u"},
+        {"销售员": "X", "销售部门": "D", "合同编号": "C",
+         "发货日期": pd.Timestamp("2026-04-25"), "发货金额": -585000.0,
+         "订货单位": "u", "开票单位": "u"},
+    ])
+    p = pd.DataFrame([
+        {"销售员": "X", "销售部门": "D", "合同编号": "C",
+         "回款日期": pd.Timestamp("2026-04-24"), "回款金额": 585000.0,
+         "核销金额": 585000.0, "开票单位": "u"},
+    ])
+    tl, _, _ = calc_payment_timeliness(d, p)
+    matched = tl[tl["匹配发货日期"].notna()]
+    assert len(matched) == 1
+    # 退货冲销的是同日同额的 04-25 那笔；03-20 完好，回款匹配到 03-20（35 天）
+    assert matched.iloc[0]["匹配发货日期"] == pd.Timestamp("2026-03-20")
+    assert matched.iloc[0]["回款周期(天)"] == 35
+    # 不应再出现负周期 / 匹配到未来发货
+    assert (tl["回款周期(天)"].dropna() >= 0).all()
+
+
 def test_calc_payment_timeliness_generates_isolated_return_placeholder():
     d = pd.DataFrame([
         {"销售员": "钱八", "销售部门": "销售部", "合同编号": "C12",
