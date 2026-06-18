@@ -93,17 +93,23 @@ def render_quota(username: str):
                 st.info("未检测到部门信息")
                 edited_dept = pd.DataFrame(columns=["部门", "部门发货额(万元)", "目标额(万元)"])
             else:
-                dept_data = [{
-                    "部门": d,
-                    "部门发货额(万元)": del_totals.get(d, 0.0),
-                    "目标额(万元)": float(saved_targets.get(d, defaults.get(d, 0.0))),
-                } for d in depts]
+                dept_data = []
+                for d in depts:
+                    del_wan = del_totals.get(d, 0.0)
+                    target_wan = float(saved_targets.get(d, defaults.get(d, 0.0)))
+                    ratio = (del_wan / target_wan * 100) if target_wan > 0 else 0.0
+                    dept_data.append({
+                        "部门": d,
+                        "部门发货额(万元)": del_wan,
+                        "目标额(万元)": target_wan,
+                        "完成比(%)": round(ratio, 1),
+                    })
                 dept_df = pd.DataFrame(dept_data)
                 edited_dept = st.data_editor(
                     dept_df,
                     width="stretch",
                     key="dept_targets_editor",
-                    disabled=["部门", "部门发货额(万元)"],
+                    disabled=["部门", "部门发货额(万元)", "完成比(%)"],
                     column_config={
                         "部门发货额(万元)": st.column_config.NumberColumn(
                             "部门发货额(万元)", format="%.2f",
@@ -111,6 +117,11 @@ def render_quota(username: str):
                         ),
                         "目标额(万元)": st.column_config.NumberColumn(
                             "目标额(万元)", format="%.2f", min_value=0.0, step=0.01,
+                        ),
+                        "完成比(%)": st.column_config.NumberColumn(
+                            "完成比(%)", format="%.1f%%",
+                            help="部门发货额 ÷ 目标额，与定档用的完成比同口径，只读参考。"
+                                 "改完目标额后保存即按新值刷新。",
                         ),
                     },
                 )
