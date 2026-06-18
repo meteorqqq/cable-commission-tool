@@ -595,8 +595,12 @@ def test_calc_payment_timeliness_refund_without_history():
     assert row["时效提成比例"] == "无可冲销记录"
 
 
-def test_calc_payment_timeliness_negative_delivery_excluded_from_pool():
-    """退货（负发货）不应进入 FIFO 池，避免把正回款"反向匹配"掉。"""
+def test_calc_payment_timeliness_return_offsets_earlier_delivery():
+    """退货应冲减"更早出现的正发货"，回款只匹配冲减后的净发货；
+    超出净发货的回款记为"超出发货额"（与 extract_isolated_returns 同口径）。
+
+    退货金额不会作为负项进入 FIFO 池，因此不会把正回款"反向匹配"掉。
+    """
     d = pd.DataFrame([
         {"销售员": "孙七", "销售部门": "销售部", "合同编号": "C11",
          "发货日期": pd.Timestamp("2024-01-01"), "发货金额": 8000,
@@ -611,11 +615,47 @@ def test_calc_payment_timeliness_negative_delivery_excluded_from_pool():
          "核销金额": 8000, "开票单位": "X"},
     ])
     tl, _, _ = calc_payment_timeliness(d, p)
-    # 单一正回款全额匹配到 2024-01-01 那笔正发货（而非被负发货抵扣）
-    assert len(tl) == 1
-    assert tl.iloc[0]["回款金额"] == 8000
-    assert tl.iloc[0]["业务类型"] == "回款"
-    assert tl.iloc[0]["匹配发货日期"] == pd.Timestamp("2024-01-01")
+    # 净发货 = 8000 - 3000 = 5000：回款 8000 拆成 5000 匹配 + 3000 超出
+    matched = tl[tl["匹配发货日期"].notna()]
+    assert len(matched) == 1
+    assert matched.iloc[0]["回款金额"] == 5000
+    assert matched.iloc[0]["匹配发货日期"] == pd.Timestamp("2024-01-01")
+    assert matched.iloc[0]["时效提成金额"] > 0
+    over = tl[tl["时效提成比例"] == "超出发货额"]
+    assert len(over) == 1
+    assert over.iloc[0]["回款金额"] == 3000
+    assert over.iloc[0]["时效提成金额"] == 0
+
+
+def test_calc_payment_timeliness_same_day_return_cancels_delivery():
+    """同日"先发货后全额退货"应整笔抵销，回款顺延匹配到后续真实发货。
+
+    回归：郭可新 RYDB251201023——2026-03-06 的发货被同日退货全额冲销，
+    回款应从 2026-03-20 的发货开始匹配，而不是停留在已退货的 03-06。
+    """
+    d = pd.DataFrame([
+        {"销售员": "郭可新", "销售部门": "电缆附件营销部", "合同编号": "RYDB251201023",
+         "发货日期": pd.Timestamp("2026-03-06"), "发货金额": 2778750.0,
+         "订货单位": "X", "开票单位": "X"},
+        {"销售员": "郭可新", "销售部门": "电缆附件营销部", "合同编号": "RYDB251201023",
+         "发货日期": pd.Timestamp("2026-03-06"), "发货金额": -2778750.0,
+         "订货单位": "X", "开票单位": "X"},
+        {"销售员": "郭可新", "销售部门": "电缆附件营销部", "合同编号": "RYDB251201023",
+         "发货日期": pd.Timestamp("2026-03-20"), "发货金额": 2000000.0,
+         "订货单位": "X", "开票单位": "X"},
+    ])
+    p = pd.DataFrame([
+        {"销售员": "郭可新", "销售部门": "电缆附件营销部", "合同编号": "RYDB251201023",
+         "回款日期": pd.Timestamp("2026-04-24"), "回款金额": 1500000.0,
+         "核销金额": 1500000.0, "开票单位": "X"},
+    ])
+    tl, _, _ = calc_payment_timeliness(d, p)
+    matched = tl[tl["匹配发货日期"].notna()]
+    assert len(matched) == 1
+    # 关键：匹配到 03-20 的发货，而非被退货抵销的 03-06
+    assert matched.iloc[0]["匹配发货日期"] == pd.Timestamp("2026-03-20")
+    assert matched.iloc[0]["回款金额"] == 1500000.0
+    assert matched.iloc[0]["回款周期(天)"] == 35
 
 
 def test_calc_payment_timeliness_generates_isolated_return_placeholder():

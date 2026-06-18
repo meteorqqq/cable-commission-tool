@@ -1441,7 +1441,7 @@ def calc_payment_timeliness(delivery_df: pd.DataFrame,
     for (salesperson, project), grp_pay in payment_df.groupby(["销售员", "合同编号"]):
         grp_del = delivery_df[
             (delivery_df["销售员"] == salesperson) & (delivery_df["合同编号"] == project)
-        ].sort_values("发货日期").copy()
+        ].sort_values("发货日期", kind="stable").copy()
 
         dept = _dept_of(salesperson, project)
         customer_unit = _resolve_customer_unit(grp_del, grp_pay)
@@ -1458,12 +1458,24 @@ def calc_payment_timeliness(delivery_df: pd.DataFrame,
                 })
             continue
 
-        # 只把"正发货"放入 FIFO 池；负发货（退货）不参与回款匹配
-        del_remaining = [
-            [d_date, float(d_amt)]
-            for d_date, d_amt in grp_del[["发货日期", "发货金额"]].values.tolist()
-            if float(d_amt) > 0.01
-        ]
+        # 构建 FIFO 发货池：正发货入池，退货先冲减"更早出现的正发货"（与
+        # extract_isolated_returns 同口径），冲减后的"净发货"才参与回款时效匹配。
+        # 这样被退货全额抵销的发货不会再吸走回款，回款自然顺延到后续真实发货。
+        # 退货超出可追溯正发货的部分为孤立退货，已由 extract_isolated_returns
+        # 单独列出，此处忽略，不影响后续正发货。
+        del_remaining: list[list] = []
+        for d_date, d_amt in grp_del[["发货日期", "发货金额"]].values.tolist():
+            amt = float(d_amt)
+            if amt > _AMOUNT_EPS:
+                del_remaining.append([d_date, amt])
+            elif amt < -_AMOUNT_EPS:
+                need = -amt
+                while need > _AMOUNT_EPS and del_remaining:
+                    take = min(need, del_remaining[0][1])
+                    del_remaining[0][1] -= take
+                    need -= take
+                    if del_remaining[0][1] <= _AMOUNT_EPS:
+                        del_remaining.pop(0)
         del_idx = 0
 
         # 已匹配历史栈（供负回款 LIFO 冲销用）
