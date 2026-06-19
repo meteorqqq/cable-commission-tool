@@ -27,3 +27,14 @@ package-lock.json
 
 # Windows 缩略图
 Thumbs.db
+
+# VSCode Counter 代码统计产物
+.VSCodeCounter/
+
+# 业务原始数据（发货/回款/利润等），含真实经营数据，不入库
+*.xls
+*.xlsx
+
+# 认证凭据：账号密码哈希 + session 密钥，必须本机持有、严禁入库
+config.yaml
+.streamlit/secrets.toml
