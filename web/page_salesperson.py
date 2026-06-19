@@ -51,12 +51,19 @@ def render_salesperson():
         st.html(empty_state("未检测到销售员信息", "请先导入交货或回款数据，系统才会生成可选的销售员列表。"))
         return
 
-    default_idx = 0
-    prev = st.session_state.get("_selected_salesperson")
-    if prev in names:
-        default_idx = names.index(prev)
-
-    sel = st.selectbox("选择销售员", names, index=default_idx, key="_selected_salesperson")
+    sel = st.selectbox(
+        "选择销售员",
+        names,
+        index=None,
+        placeholder="请选择销售员…",
+        key="_selected_salesperson",
+    )
+    if not sel:
+        st.html(empty_state(
+            "请选择销售员",
+            "从上方下拉框中选择对应的销售员或部门，即可查看其合同发货、回款与提成明细。",
+        ))
+        return
 
     profit_df = st.session_state.get("profit_result")
     timeliness_df = st.session_state.get("timeliness_result")

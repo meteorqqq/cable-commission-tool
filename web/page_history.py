@@ -1,7 +1,6 @@
 """历史记录页"""
 
 import streamlit as st
-import pandas as pd
 
 from db.database import list_sessions, load_session_results, delete_session
 from engine.calculator import format_date_columns

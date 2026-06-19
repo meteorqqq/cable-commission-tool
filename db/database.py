@@ -65,7 +65,47 @@ def get_engine():
         engine_kwargs.update(pool_pre_ping=True, pool_recycle=300)
     engine = create_engine(url, **engine_kwargs)
     Base.metadata.create_all(engine)
+    _ensure_saved_rules_unique(engine)
     return engine
+
+
+def _ensure_saved_rules_unique(engine) -> None:
+    """为既有库补建 saved_rules 的 (username, rule_type) 唯一索引。
+
+    ``create_all`` 只会为新表建索引，已存在的旧表不会被补索引。这里对既有库
+    先折叠历史重复行（每组保留 ``updated_at`` 最新、其次 id 最大的一条），再建
+    唯一索引。SQLite 与 Postgres 通用，且对已建索引的库是幂等空操作。
+    """
+    from sqlalchemy import inspect, text
+
+    insp = inspect(engine)
+    if "saved_rules" not in insp.get_table_names():
+        return
+    index_names = {ix.get("name") for ix in insp.get_indexes("saved_rules")}
+    try:
+        index_names |= {uc.get("name")
+                        for uc in insp.get_unique_constraints("saved_rules")}
+    except Exception:
+        pass
+    if "uq_saved_rules_user_type" in index_names:
+        return
+
+    with engine.begin() as conn:
+        # 折叠重复：用窗口函数为每个 (username, rule_type) 选出唯一保留行。
+        conn.execute(text(
+            "DELETE FROM saved_rules WHERE id NOT IN ("
+            "  SELECT id FROM ("
+            "    SELECT id, ROW_NUMBER() OVER ("
+            "      PARTITION BY username, rule_type"
+            "      ORDER BY updated_at DESC, id DESC"
+            "    ) AS rn FROM saved_rules"
+            "  ) ranked WHERE rn = 1"
+            ")"
+        ))
+        conn.execute(text(
+            "CREATE UNIQUE INDEX IF NOT EXISTS uq_saved_rules_user_type "
+            "ON saved_rules (username, rule_type)"
+        ))
 
 
 _engine = None
@@ -163,21 +203,18 @@ def save_rules(username: str, rule_type: str, rule_data: object):
     sess = get_session()
     try:
         if _is_postgres() and _pg_insert is not None:
+            # 有 (username, rule_type) 唯一索引后，直接走原子 upsert，免去先查再写。
+            now = datetime.now()
             stmt = _pg_insert(SavedRule.__table__).values(
                 username=username,
                 rule_type=rule_type,
                 rule_data_json=data_json,
-                updated_at=datetime.now(),
+                updated_at=now,
+            ).on_conflict_do_update(
+                index_elements=["username", "rule_type"],
+                set_={"rule_data_json": data_json, "updated_at": now},
             )
-            # 注意：saved_rules 没有 (username, rule_type) 的 UNIQUE 约束，
-            # 这里退回到"先查再改/插"的语义，和原实现保持一致。
-            existing = sess.query(SavedRule).filter_by(
-                username=username, rule_type=rule_type).first()
-            if existing:
-                existing.rule_data_json = data_json
-                existing.updated_at = datetime.now()
-            else:
-                sess.execute(stmt)
+            sess.execute(stmt)
             sess.commit()
             return
 

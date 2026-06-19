@@ -217,7 +217,6 @@ def _group_by_pid_sp(df, key_cols=("合同编号", "销售员")):
 
     一次 groupby + O(N) 分桶，后续取子集都是 O(1)。
     """
-    import pandas as pd
     if df is None or df.empty:
         return {}
     if any(c not in df.columns for c in key_cols):

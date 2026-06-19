@@ -2,7 +2,7 @@
 
 from datetime import datetime
 from sqlalchemy import (
-    Column, Integer, String, Float, Text, DateTime, ForeignKey, create_engine,
+    Column, Integer, String, Float, Text, DateTime, ForeignKey, Index,
 )
 from sqlalchemy.orm import declarative_base, relationship
 
@@ -40,6 +40,12 @@ class SavedRule(Base):
     rule_type = Column(String(50), nullable=False)
     rule_data_json = Column(Text, nullable=False)
     updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
+
+    # 每个 (用户, 规则类型) 至多一条记录；唯一索引让并发写可靠地走 upsert，
+    # 杜绝竞态下产生重复行。对既有库由 database._ensure_saved_rules_unique 迁移补建。
+    __table_args__ = (
+        Index("uq_saved_rules_user_type", "username", "rule_type", unique=True),
+    )
 
 
 class ContractPrice(Base):

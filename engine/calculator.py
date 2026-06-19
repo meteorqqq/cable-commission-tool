@@ -13,7 +13,7 @@ import re
 
 import pandas as pd
 import numpy as np
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 
 _DEPT_CODE_RE = re.compile(r"^[\s]*\d[\d]*\s*\|?\s*")
@@ -504,6 +504,54 @@ def _is_contract_id_col(normalized_col: str) -> bool:
     return "项目" in normalized_col or "工程" in normalized_col
 
 
+# 一格里可能写了多个合同号（如 "RYDB260420007、RYDB260420008"），支持
+# 中/英文顿号、逗号、斜杠、分号、竖线、换行、多空格等常见分隔符。
+_PID_SPLIT_RE = re.compile(r"[、,，/;；|\n\r\t]+| {2,}")
+
+
+def _norm_price_col(s: object) -> str:
+    """归一化价格表列名：去空白和"（元）"等后缀，便于模糊匹配。"""
+    return (
+        str(s).replace(" ", "").replace("（元）", "").replace("(元)", "")
+        .replace("（", "").replace("）", "")
+    )
+
+
+def _match_pricing_columns(columns) -> dict[str, str | None]:
+    """从价格表列名识别合同标识列与三类价格列。
+
+    返回 ``{"pid_col", "guide_col", "contract_col", "cost_col"}``，未命中为 None。
+    """
+    matched: dict[str, str | None] = {
+        "pid_col": None, "guide_col": None, "contract_col": None, "cost_col": None,
+    }
+    for col in columns:
+        cl = _norm_price_col(col)
+        if matched["pid_col"] is None and _is_contract_id_col(cl):
+            matched["pid_col"] = col
+        elif matched["guide_col"] is None and any(k in cl for k in (
+            "指导价", "基准价", "目标价", "标准价", "参考价"
+        )):
+            matched["guide_col"] = col
+        elif matched["contract_col"] is None and any(k in cl for k in (
+            "合同总价", "合同金额", "合同价", "销售价", "成交价"
+        )):
+            matched["contract_col"] = col
+        elif matched["cost_col"] is None and any(k in cl for k in (
+            "成本价", "制造成本", "采购价", "成本"
+        )):
+            matched["cost_col"] = col
+    return matched
+
+
+def _split_pids(raw: object) -> list[str]:
+    """把"一格多号"的合同标识拆成干净的合同号列表。"""
+    if raw is None or pd.isna(raw):
+        return []
+    parts = [p.strip() for p in _PID_SPLIT_RE.split(str(raw))]
+    return [p for p in parts if p and p.lower() not in ("nan", "none")]
+
+
 def load_contract_pricing_excel(path: str) -> dict[str, "ContractPricing"]:
     """读取合同价格 Excel。
 
@@ -519,29 +567,11 @@ def load_contract_pricing_excel(path: str) -> dict[str, "ContractPricing"]:
     df = _read_table(path, header=header_row)
     df.columns = [str(c).strip() for c in df.columns]
 
-    def _norm(s: str) -> str:
-        return (
-            str(s).replace(" ", "").replace("（元）", "").replace("(元)", "")
-            .replace("（", "").replace("）", "")
-        )
-
-    pid_col = guide_col = contract_col = cost_col = None
-    for col in df.columns:
-        cl = _norm(col)
-        if pid_col is None and _is_contract_id_col(cl):
-            pid_col = col
-        elif guide_col is None and any(k in cl for k in (
-            "指导价", "基准价", "目标价", "标准价", "参考价"
-        )):
-            guide_col = col
-        elif contract_col is None and any(k in cl for k in (
-            "合同总价", "合同金额", "合同价", "销售价", "成交价"
-        )):
-            contract_col = col
-        elif cost_col is None and any(k in cl for k in (
-            "成本价", "制造成本", "采购价", "成本"
-        )):
-            cost_col = col
+    matched = _match_pricing_columns(df.columns)
+    pid_col = matched["pid_col"]
+    guide_col = matched["guide_col"]
+    contract_col = matched["contract_col"]
+    cost_col = matched["cost_col"]
 
     if pid_col is None:
         raise ValueError(
@@ -555,16 +585,6 @@ def load_contract_pricing_excel(path: str) -> dict[str, "ContractPricing"]:
         )
 
     result: dict[str, ContractPricing] = {}
-    # 一格里可能写了多个合同号（如 "RYDB260420007、RYDB260420008"），支持
-    # 中/英文顿号、逗号、斜杠、分号、竖线、换行、多空格等常见分隔符。
-    _split_re = re.compile(r"[、,，/;；|\n\r\t]+| {2,}")
-
-    def _split_pids(raw: object) -> list[str]:
-        if raw is None or pd.isna(raw):
-            return []
-        parts = [p.strip() for p in _split_re.split(str(raw))]
-        return [p for p in parts if p and p.lower() not in ("nan", "none")]
-
     for _, row in df.iterrows():
         pids = _split_pids(row[pid_col])
         if not pids:
@@ -615,43 +635,16 @@ def load_contract_pricing_excel_with_meta(path: str) -> tuple[dict[str, "Contrac
     priced = len(result)
     zero_pids: list[str] = []
 
-    # 复用上面的识别逻辑来抓出命中列名（无侵入的再跑一次）
-    def _norm(s: str) -> str:
-        return (
-            str(s).replace(" ", "").replace("（元）", "").replace("(元)", "")
-            .replace("（", "").replace("）", "")
-        )
-    matched: dict[str, str | None] = {
-        "pid_col": None, "guide_col": None, "contract_col": None, "cost_col": None,
-    }
-    for col in df.columns:
-        cl = _norm(col)
-        if matched["pid_col"] is None and _is_contract_id_col(cl):
-            matched["pid_col"] = col
-        elif matched["guide_col"] is None and any(k in cl for k in (
-            "指导价", "基准价", "目标价", "标准价", "参考价"
-        )):
-            matched["guide_col"] = col
-        elif matched["contract_col"] is None and any(k in cl for k in (
-            "合同总价", "合同金额", "合同价", "销售价", "成交价"
-        )):
-            matched["contract_col"] = col
-        elif matched["cost_col"] is None and any(k in cl for k in (
-            "成本价", "制造成本", "采购价", "成本"
-        )):
-            matched["cost_col"] = col
+    # 复用与解析完全相同的识别逻辑，避免两处口径漂移。
+    matched = _match_pricing_columns(df.columns)
 
     raw_rows = 0
     dup_counts: dict[str, int] = {}
     split_rows = 0  # 发生"一格多号"拆分的 Excel 行数
     pid_col = matched.get("pid_col")
-    _split_re = re.compile(r"[、,，/;；|\n\r\t]+| {2,}")
     if pid_col is not None and pid_col in df.columns:
         for v in df[pid_col]:
-            if pd.isna(v):
-                continue
-            parts = [p.strip() for p in _split_re.split(str(v))]
-            parts = [p for p in parts if p and p.lower() not in ("nan", "none")]
+            parts = _split_pids(v)
             if not parts:
                 continue
             if len(parts) > 1:
