@@ -35,6 +35,5 @@ Thumbs.db
 *.xls
 *.xlsx
 
-# 认证凭据：账号密码哈希 + session 密钥，必须本机持有、严禁入库
-config.yaml
+# Streamlit 本机 secrets，不入库（config.yaml 为 demo 凭据，已入库）
 .streamlit/secrets.toml
