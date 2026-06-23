@@ -1015,6 +1015,19 @@ def main():
     username = st.session_state.get("username", "")
     display_name = st.session_state.get("name", username)
 
+    # ── 跨页面保留各模块的筛选条件 ──
+    # 本应用是单页应用，8 个模块靠侧栏切换、条件渲染。Streamlit 会回收"本轮未被
+    # 渲染的控件"的状态，因此切到别的模块时，上一个模块的筛选控件未渲染、其
+    # session_state 会被清空，切回来筛选就丢了。
+    # 把已存在的值"重新提交"一次，可将其从控件态提升为用户态而不被回收，从而
+    # 跨页面保留筛选条件。data_editor / file_uploader 等不允许经 session_state
+    # 写回的控件会抛异常，忽略即可。
+    for _persist_key in list(st.session_state.keys()):
+        try:
+            st.session_state[_persist_key] = st.session_state[_persist_key]
+        except Exception:
+            pass
+
     initial = (display_name[:1] if display_name else username[:1] or "U").upper()
     _dn = html.escape(str(display_name or ""))
     _un = html.escape(str(username or ""))
