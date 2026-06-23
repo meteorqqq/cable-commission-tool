@@ -3,19 +3,32 @@
 import streamlit as st
 import pandas as pd
 
-from db.database import save_calc_session
+from db.database import (
+    save_calc_session, save_shared_result, clear_shared_results,
+    load_rules, load_contract_prices,
+)
 from engine.calculator import (
     annotate_delivery_business_type,
     annotate_payment_business_type,
     contract_status as _status_of,
+    calc_quota_commission_by_dept, DEFAULT_QUOTA_TIERS,
+    calc_profit_commission, ContractPricing,
+    DEFAULT_PROFIT_BASE_RATE, DEFAULT_PROFIT_K_MAX,
+    calc_payment_timeliness, DEFAULT_PAYMENT_TIERS,
 )
 from web._ui import fmt_money, meta_row, kpi_row, page_intro, panel_intro, empty_state
-from web._download import render_df_download_buttons, render_multi_download_buttons
+from web._download import (
+    render_lazy_df_download_buttons, render_lazy_multi_download_buttons,
+)
 from web._table import dataframe_with_fulltext_panel
 from web._cache import (
-    calc_version, get_invoice_units_by_contract_sp, get_contract_overview,
+    calc_version, bump_calc_version,
+    get_invoice_units_by_contract_sp, get_contract_overview,
     get_main_contract_map, get_contract_dept_map, session_cache,
 )
+# 复用完成额度页的部门列表 / 部门回款额（目标额未保存时的兜底默认值），
+# 保证「一键计算」与逐页计算口径一致。page_quota 不反向依赖本模块，无循环导入。
+from web.page_quota import _get_dept_list, _calc_dept_totals
 
 
 def _parse_pct_to_ratio(v) -> float:
@@ -203,7 +216,8 @@ def _build_contract_breakdown_by_salesperson() -> dict[str, pd.DataFrame]:
         p_amt = round(base.get("合同回款额", 0.0), 2)
         contract_dept = contract_dept_map.get((str(sp), str(pid)), "")
         quota_ratio = quota_rate_map.get((str(sp).strip(), contract_dept), 0.0)
-        quota_amt = round(p_amt * quota_ratio, 2)
+        # 销售回款额 = min(发货, 回款)：与完成额度引擎同口径，超收部分不计提成。
+        quota_amt = round(min(d_amt, p_amt) * quota_ratio, 2)
         profit_amt = round(prof.get("利润提成金额", 0.0), 2)
         profit_ratio = _parse_pct_to_ratio(prof.get("利润提成率", ""))
         tl_info = tl_lookup.get((sp, pid), {})
@@ -441,6 +455,106 @@ def _valid_total_result() -> pd.DataFrame | None:
     return total_df
 
 
+def _compute_all_commissions(username: str) -> dict:
+    """一键算完三类提成并汇总。
+
+    规则 / 目标额 / 合同价格都取自数据库里「已保存」的版本（各页『保存规则 /
+    保存目标额 / 保存价格表』写入的）；若某项没保存则用与逐页一致的默认值兜底。
+    页面内尚未保存的即时编辑不会被这里采用。
+
+    返回 ``{"ok": bool, "msg": str, "counts": dict}``。
+    """
+    delivery_df = st.session_state.get("delivery_df")
+    payment_df = st.session_state.get("payment_df")
+    if delivery_df is None or payment_df is None:
+        return {"ok": False, "msg": "请先在『数据导入』页上传交货和回款数据。", "counts": {}}
+
+    counts: dict[str, int] = {}
+    errors: list[str] = []
+
+    # 1) 完成额度提成
+    try:
+        saved_tiers = load_rules(username, "quota_tiers")
+        raw_tiers = saved_tiers if saved_tiers else [list(t) for t in DEFAULT_QUOTA_TIERS]
+        q_tiers = [tuple(r) for r in raw_tiers
+                   if r and len(r) >= 2 and pd.notna(r[0]) and pd.notna(r[1])]
+        depts = _get_dept_list()
+        pay_defaults = _calc_dept_totals()
+        saved_targets = load_rules(username, "dept_targets") or {}
+        dept_targets = {
+            d: float(saved_targets.get(d, pay_defaults.get(d, 0.0))) for d in depts
+        }
+        quota_res = calc_quota_commission_by_dept(
+            delivery_df, payment_df, dept_targets, q_tiers)
+        st.session_state["quota_result"] = quota_res
+        save_shared_result("quota_result", quota_res)
+        counts["quota"] = (
+            int(quota_res["销售员"].astype(str).nunique())
+            if quota_res is not None and not quota_res.empty else 0
+        )
+    except Exception as e:
+        errors.append(f"完成额度提成：{e}")
+
+    # 2) 利润提成
+    try:
+        saved_profit = load_rules(username, "profit")
+        base_rate = saved_profit["base_rate"] if saved_profit else DEFAULT_PROFIT_BASE_RATE
+        k_max = saved_profit["k_max"] if saved_profit else DEFAULT_PROFIT_K_MAX
+        prices: dict[str, ContractPricing] = {}
+        for p in load_contract_prices(username):
+            gp = float(p.get("guide_price") or 0)
+            cp = float(p.get("contract_price") or 0)
+            cos = float(p.get("cost_price") or 0)
+            if gp == 0 and cp == 0 and cos == 0:
+                continue
+            prices[p["project_id"]] = ContractPricing(
+                project_id=p["project_id"],
+                guide_price=gp, contract_price=cp, cost_price=cos,
+            )
+        profit_res = calc_profit_commission(
+            delivery_df, payment_df, prices,
+            base_rate_pct=base_rate, k_max=k_max,
+            main_contract_map=get_main_contract_map(),
+        )
+        st.session_state["profit_result"] = profit_res
+        save_shared_result("profit_result", profit_res)
+        counts["profit"] = len(profit_res) if profit_res is not None else 0
+    except Exception as e:
+        errors.append(f"利润提成：{e}")
+
+    # 3) 回款时效提成
+    try:
+        saved_pay = load_rules(username, "payment_tiers")
+        raw_pt = saved_pay if saved_pay else [list(t) for t in DEFAULT_PAYMENT_TIERS]
+        p_tiers = [tuple(r) for r in raw_pt
+                   if r and len(r) >= 2 and pd.notna(r[0]) and pd.notna(r[1])]
+        tl_res, del_summary, pay_summary = calc_payment_timeliness(
+            delivery_df, payment_df, p_tiers)
+        st.session_state["timeliness_result"] = tl_res
+        st.session_state["del_summary"] = del_summary
+        st.session_state["pay_summary"] = pay_summary
+        save_shared_result("timeliness_result", tl_res)
+        counts["timeliness"] = len(tl_res) if tl_res is not None else 0
+    except Exception as e:
+        errors.append(f"回款时效提成：{e}")
+
+    # 三类结果都更新后统一刷新计算版本，再据此重建总汇总。
+    bump_calc_version()
+
+    total_df = _build_total_df()
+    if total_df is not None and not total_df.empty:
+        st.session_state["total_result"] = total_df
+        st.session_state["total_result_signature"] = _current_total_signature()
+        save_shared_result("total_result", total_df)
+        counts["total"] = len(total_df)
+    else:
+        st.session_state["total_result"] = None
+        clear_shared_results(("total_result",))
+        counts["total"] = 0
+
+    return {"ok": not errors, "msg": "；".join(errors), "counts": counts}
+
+
 def render_total(username: str):
     total_df = _valid_total_result()
     meta_items = [
@@ -459,13 +573,45 @@ def render_total(username: str):
         meta=meta_items,
     ))
 
-    if st.button("汇总计算", type="primary", use_container_width=True):
+    st.caption(
+        "「一键计算所有提成」使用各模块**已保存**的规则、目标额与合同价格依次计算"
+        "完成额度 / 利润 / 回款时效，并自动汇总。若刚在某页改了规则但没保存，请先到"
+        "该页保存或单独计算。"
+    )
+    col_all, col_sum = st.columns([2, 1], gap="medium")
+    with col_all:
+        run_all = st.button(
+            "⚡ 一键计算所有提成", type="primary", use_container_width=True,
+            help="依次计算 完成额度 / 利润 / 回款时效，并自动生成总汇总。",
+        )
+    with col_sum:
+        run_sum = st.button(
+            "仅重新汇总", use_container_width=True,
+            help="用各页已经算好的结果重新生成总汇总，不重算各模块。",
+        )
+
+    if run_all:
+        with st.spinner("正在计算全部提成…"):
+            res = _compute_all_commissions(username)
+        c = res["counts"]
+        if res["ok"]:
+            st.success(
+                f"已一键计算并汇总：完成额度 {c.get('quota', 0)} 人 · "
+                f"利润 {c.get('profit', 0)} 条 · 时效 {c.get('timeliness', 0)} 条 · "
+                f"汇总 {c.get('total', 0)} 人。"
+            )
+        else:
+            st.error("部分模块未成功：" + res["msg"])
+
+    if run_sum:
         total_df = _build_total_df()
         if total_df is None or total_df.empty:
-            st.warning("请先在各提成页面完成计算")
+            st.warning("请先在各提成页面完成计算（或点上方『一键计算所有提成』）。")
         else:
             st.session_state["total_result"] = total_df
             st.session_state["total_result_signature"] = _current_total_signature()
+            # 共享给所有账号，别人登录即看到同一份总汇总。
+            save_shared_result("total_result", total_df)
             st.success(f"汇总完成，共 {len(total_df)} 位销售员")
 
     stored_total_df = st.session_state.get("total_result")
@@ -513,14 +659,26 @@ def render_total(username: str):
 
             breakdown = _build_contract_breakdown_by_salesperson()
 
+            # 先按筛选/搜索过滤，再限量渲染：每个展开项内含一个可选中表格，
+            # 几十上百个一次性渲染会拖垮单线程（页面卡死，严重时会话超时被下线）。
+            _kw = search_sp.strip() if search_sp else ""
+            visible_rows = [
+                row for _, row in total_df.iterrows()
+                if not (filter_dept and str(row.get("销售部门", "")) not in filter_dept)
+                and not (_kw and _kw not in str(row["销售员"]))
+            ]
+            MAX_SP_EXPANDERS = 40
+            if len(visible_rows) > MAX_SP_EXPANDERS:
+                st.warning(
+                    f"匹配到 {len(visible_rows)} 位销售员，为保证流畅，明细区仅展开前 "
+                    f"{MAX_SP_EXPANDERS} 位。请用上方「部门筛选 / 姓名搜索」缩小范围，"
+                    "或用下方「下载全部」导出完整明细。"
+                )
+
             shown = 0
-            for _, row in total_df.iterrows():
+            for row in visible_rows[:MAX_SP_EXPANDERS]:
                 sp = str(row["销售员"])
                 dept = str(row.get("销售部门", ""))
-                if filter_dept and dept not in filter_dept:
-                    continue
-                if search_sp and search_sp.strip() and search_sp.strip() not in sp:
-                    continue
 
                 sp_df = breakdown.get(sp, pd.DataFrame())
                 n_contracts = len(sp_df)
@@ -593,11 +751,12 @@ def render_total(username: str):
                                 "合同小计": st.column_config.NumberColumn(format="%.2f"),
                             },
                         )
-                        render_df_download_buttons(
+                        render_lazy_df_download_buttons(
                             sp_df,
                             base_filename=f"{sp}_合同明细",
                             sheet_name="合同明细",
                             key_prefix=f"dl_total_sp_{sp}",
+                            prepare_label="准备下载该销售员明细",
                         )
                 shown += 1
 
@@ -607,11 +766,11 @@ def render_total(username: str):
         st.markdown("")
         col_dl, col_save = st.columns(2, gap="large")
 
-        sheets = _collect_export_sheets(total_df)
-
+        # 整本导出（含全部交货/回款明细）很重：改为点击后再汇总并序列化，
+        # 不在每次渲染时即时构建，避免拖垮页面。
         with col_dl:
-            render_multi_download_buttons(
-                sheets,
+            render_lazy_multi_download_buttons(
+                lambda: _collect_export_sheets(total_df),
                 base_filename="提成汇总",
                 key_prefix="total_export_all",
             )
@@ -620,5 +779,6 @@ def render_total(username: str):
             session_name = st.text_input("会话名称", value="", placeholder="输入备注名称",
                                           label_visibility="collapsed")
             if st.button("保存到历史记录", use_container_width=True):
+                sheets = _collect_export_sheets(total_df)
                 sid = save_calc_session(username, session_name or "未命名", sheets)
                 st.success(f"已保存 (ID: {sid})")

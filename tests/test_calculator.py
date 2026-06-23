@@ -361,6 +361,46 @@ def test_calc_quota_commission_splits_cross_department_salesperson():
     assert nb["个人发货额(元)"] == pytest.approx(300000.0)
 
 
+def test_calc_quota_commission_caps_base_at_delivery():
+    """销售回款额 = 各合同 min(发货, 回款) 之和：
+    回款超过发货时按发货计；未发货却已收款的合同记 0。"""
+    d = pd.DataFrame([
+        {"销售员": "王五", "销售部门": "东部", "合同编号": "A1", "发货金额": 100000},
+        # B1 未发货
+    ])
+    p = pd.DataFrame([
+        {"销售员": "王五", "销售部门": "东部", "合同编号": "A1", "回款金额": 150000},  # 超收
+        {"销售员": "王五", "销售部门": "东部", "合同编号": "B1", "回款金额": 80000},   # 未发货已收款
+    ])
+    # 部门发货 100000，目标 10 万 → 完成比 100% → 0.2% 档
+    res = calc_quota_commission_by_dept(d, p, {"东部": 10})
+    w = res[res["销售员"] == "王五"].iloc[0]
+    assert w["提成比例"] == "0.20%"
+    # A1 取 min(100000,150000)=100000；B1 取 min(0,80000)=0 → 合计 100000
+    assert w["销售回款额(元)"] == pytest.approx(100000.0)
+    assert w["个人回款额(元)"] == pytest.approx(230000.0)  # 实收仍展示全额
+    # 提成按销售回款额：100000 × 0.2% = 200，而非 230000 × 0.2% = 460
+    assert w["完成额度提成(元)"] == pytest.approx(200.0)
+
+
+def test_calc_profit_commission_caps_base_at_delivery():
+    """利润提成基数 = min(合同发货, 合同回款)：超收部分不计提成。"""
+    d = pd.DataFrame([
+        {"销售员": "张三", "销售部门": "东部", "合同编号": "C1",
+         "发货金额": 10000, "发货日期": pd.Timestamp("2024-01-10")},
+    ])
+    p = pd.DataFrame([
+        {"销售员": "张三", "销售部门": "东部", "合同编号": "C1",
+         "回款金额": 30000, "回款日期": pd.Timestamp("2024-02-10")},  # 超收
+    ])
+    prices = {"C1": ContractPricing("C1", 100, 110, 80)}  # k=1.1 → rate=0.2%×1.1
+    res = calc_profit_commission(d, p, prices)
+    row = res[res["合同编号"] == "C1"].iloc[0]
+    assert row["销售回款额"] == pytest.approx(10000.0)  # 取较小的发货额
+    expected = round(10000 * 0.002 * 1.1, 2)            # 用发货而非回款 30000
+    assert row["利润提成金额"] == pytest.approx(expected)
+
+
 def test_calc_profit_commission_handles_unpriced_contracts():
     d, p = _sample_delivery(), _sample_payment()
     prices = {"C1": ContractPricing("C1", 100000, 95000, 80000)}  # 只给 C1

@@ -9,7 +9,9 @@ from engine.calculator import (
     calc_payment_timeliness, DEFAULT_PAYMENT_TIERS, format_date_columns,
     contract_status as _status_of,
 )
-from db.database import save_rules, load_rules
+from db.database import (
+    save_rules, load_rules, save_shared_result, clear_shared_results,
+)
 from web._ui import (
     fmt_money, split_units, truncate_units_text,
     status_badge, unit_pills, kpi_row, meta_row, section_title, page_intro,
@@ -186,6 +188,15 @@ def _build_and_offer_per_sp_download(
         return
 
     if not picked_sps:
+        # 「全部销售员」会把每个人的多 sheet 合并再序列化成一个大 Excel，很重；
+        # 改为点击后再构建，避免每次渲染该页都即时跑一遍 openpyxl 拖垮单线程。
+        ready_key = "_dl_ready::payment_export_all_xlsx"
+        if not st.session_state.get(ready_key):
+            if st.button("准备下载 Excel（全部销售员）",
+                         key="payment_export_all_prep", use_container_width=True):
+                st.session_state[ready_key] = True
+            else:
+                return
         sp_options = sorted(
             v for v in summary_df["销售员"].dropna().astype(str).unique()
             if v and v.lower() not in ("nan", "none")
@@ -294,6 +305,10 @@ def render_payment(username: str):
             st.session_state["del_summary"] = del_summary
             st.session_state["pay_summary"] = pay_summary
             bump_calc_version()
+            # 共享给所有账号；上游变了，已有的总汇总作废，清掉共享 total。
+            save_shared_result("timeliness_result", timeliness_df)
+            clear_shared_results(("total_result",))
+            st.session_state["total_result"] = None
             st.success(f"计算完成，时效记录 {len(timeliness_df)} 条")
         except Exception as e:
             st.error(f"计算出错: {e}")

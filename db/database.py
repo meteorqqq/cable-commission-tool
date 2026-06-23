@@ -29,9 +29,22 @@ except Exception:
 
 from db.models import (
     Base, CalcSession, SessionResult, SavedRule, ContractPrice, ImportedSnapshot,
+    SharedResult,
 )
 
 DB_PATH = Path(__file__).resolve().parent.parent / "data" / "app.db"
+
+# 全公司共享工作台的固定键：导入数据 / 规则 / 价格 / 计算结果都按此键存，
+# 所有账号看同一份。详见 memory: shared-workspace-all-accounts。
+SHARED_WORKSPACE = "__shared__"
+
+# 会被共享、且需要在登录时自动载入的计算结果类型。
+SHARED_RESULT_TYPES = (
+    "quota_result",
+    "profit_result",
+    "timeliness_result",
+    "total_result",
+)
 
 
 def _resolve_db_url() -> str:
@@ -430,5 +443,99 @@ def load_import_snapshots(username: str) -> tuple[pd.DataFrame | None, pd.DataFr
             else None
         )
         return _normalize_loaded_df(delivery), _normalize_loaded_df(payment)
+    finally:
+        sess.close()
+
+
+# ── 共享计算结果（全工作台一份，登录即用） ──────────────────
+
+def save_shared_result(result_type: str, df: pd.DataFrame | None) -> None:
+    """把某类计算结果以「最新值」upsert 到共享结果表。
+
+    ``df`` 为 None 或空表时，写入空值（等价于清掉该类结果）。沿用
+    "尝试 INSERT，撞 unique 约束就改 UPDATE" 的双保险，避免 Streamlit
+    多会话并发写时触发 UniqueViolation。
+    """
+    data_json = (
+        _dataframe_to_records_json(df)
+        if df is not None and not df.empty
+        else None
+    )
+
+    sess = get_session()
+    try:
+        if _is_postgres() and _pg_insert is not None:
+            now = datetime.now()
+            stmt = _pg_insert(SharedResult.__table__).values(
+                workspace=SHARED_WORKSPACE,
+                result_type=result_type,
+                data_json=data_json,
+                updated_at=now,
+            ).on_conflict_do_update(
+                index_elements=["workspace", "result_type"],
+                set_={"data_json": data_json, "updated_at": now},
+            )
+            sess.execute(stmt)
+            sess.commit()
+            return
+
+        row = sess.query(SharedResult).filter_by(
+            workspace=SHARED_WORKSPACE, result_type=result_type).first()
+        if row is None:
+            row = SharedResult(
+                workspace=SHARED_WORKSPACE,
+                result_type=result_type,
+                data_json=data_json,
+            )
+            sess.add(row)
+            try:
+                sess.commit()
+                return
+            except IntegrityError:
+                sess.rollback()
+                row = sess.query(SharedResult).filter_by(
+                    workspace=SHARED_WORKSPACE, result_type=result_type).first()
+                if row is None:
+                    raise
+        row.data_json = data_json
+        row.updated_at = datetime.now()
+        sess.commit()
+    finally:
+        sess.close()
+
+
+def load_shared_results() -> dict[str, pd.DataFrame]:
+    """读取所有共享计算结果，返回 ``{result_type: DataFrame}``。
+
+    空值（已被清空）的类型不会出现在返回的字典里。
+    """
+    sess = get_session()
+    try:
+        out: dict[str, pd.DataFrame] = {}
+        rows = sess.query(SharedResult).filter_by(
+            workspace=SHARED_WORKSPACE).all()
+        for row in rows:
+            raw = _decode_json_blob(row.data_json)
+            if not raw:
+                continue
+            out[row.result_type] = pd.read_json(io.StringIO(raw), orient="records")
+        return out
+    finally:
+        sess.close()
+
+
+def clear_shared_results(result_types: tuple[str, ...] | None = None) -> None:
+    """清空共享计算结果。
+
+    ``result_types`` 为 None 时清掉全部；否则只清掉指定的几类。重新导入交货/
+    回款数据后调用（清全部），或上游结果重算导致总汇总失效时调用（清 total）。
+    """
+    sess = get_session()
+    try:
+        q = sess.query(SharedResult).filter_by(workspace=SHARED_WORKSPACE)
+        if result_types:
+            q = q.filter(SharedResult.result_type.in_(result_types))
+        q.delete(synchronize_session=False)
+        sess.commit()
     finally:
         sess.close()

@@ -25,6 +25,7 @@ from web._ui import (
 )
 from db.database import (
     save_rules, load_rules, save_contract_prices, load_contract_prices,
+    save_shared_result, clear_shared_results,
 )
 
 
@@ -366,7 +367,8 @@ def _render_price_groups(price_df: pd.DataFrame) -> None:
 def render_profit(username: str):
     st.html(page_intro(
         "利润提成",
-        "根据合同价格、指导价与成本价生成利润提成率，并按合同回款额自动计算提成。",
+        "根据合同价格、指导价与成本价生成利润提成率，并按销售回款额"
+        "（min(合同发货额, 合同回款额)）自动计算提成；回款超过发货的部分不计提成。",
         eyebrow="Profit Engine",
     ))
 
@@ -709,6 +711,10 @@ def render_profit(username: str):
                     )
                     st.session_state["profit_result"] = result
                     bump_calc_version()
+                    # 共享给所有账号；上游变了，已有的总汇总作废，清掉共享 total。
+                    save_shared_result("profit_result", result)
+                    clear_shared_results(("total_result",))
+                    st.session_state["total_result"] = None
                     st.success(f"计算完成，共 {len(result)} 条记录")
                 except Exception as e:
                     st.error(f"计算出错: {e}")

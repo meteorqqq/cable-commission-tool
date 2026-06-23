@@ -20,8 +20,8 @@ from web.page_total import render_total
 from web.page_history import render_history
 from web.page_salesperson import render_salesperson
 from web.page_balance import render_balance
-from db.database import load_import_snapshots
-from web._cache import bump_data_version
+from db.database import load_import_snapshots, load_shared_results, SHARED_WORKSPACE
+from web._cache import bump_data_version, calc_version
 
 st.set_page_config(
     page_title="锐洋集团提成计算工具",
@@ -1111,7 +1111,11 @@ def main():
     if "payment_df" not in st.session_state:
         st.session_state.payment_df = None
 
-    # 用户切换时先清空派生状态，避免上一账号的数据残留到当前账号。
+    # ── 载入共享工作台 ──
+    # 本应用是「全公司共享」模式：导入数据、规则、价格、计算结果都按固定的
+    # SHARED_WORKSPACE 键存，所有账号看同一份。每个浏览器会话首次进入（或换人
+    # 登录）时，把共享的导入快照与计算结果载入本会话，让「一人算完、别人登录直接
+    # 享用」成立，无需重算。
     if st.session_state.get("_snapshot_loaded_for") != username:
         for state_key in (
             "delivery_df",
@@ -1126,7 +1130,7 @@ def main():
         for state_key in UPLOAD_FINGERPRINT_KEYS:
             st.session_state.pop(state_key, None)
 
-        snap_dd, snap_pd = load_import_snapshots(username)
+        snap_dd, snap_pd = load_import_snapshots(SHARED_WORKSPACE)
         changed = False
         if snap_dd is not None:
             st.session_state.delivery_df = snap_dd
@@ -1138,15 +1142,26 @@ def main():
         if changed:
             bump_data_version()
 
+        # 载入共享计算结果：直接放进本会话的结果槽位。
+        for rtype, rdf in load_shared_results().items():
+            if rdf is not None and not rdf.empty:
+                st.session_state[rtype] = rdf
+        # 让载入的「总提成汇总」被视作与当前数据版本一致，否则总汇总页会因签名
+        # 不匹配而提示重新汇总。仅在确有总汇总结果时设置。
+        if st.session_state.get("total_result") is not None:
+            st.session_state["total_result_signature"] = calc_version()
+
+    # 共享模式下，所有按账号存取的数据都改用 SHARED_WORKSPACE 键，让各账号读写
+    # 同一份。展示用的 username / display_name 不受影响（仅用于侧栏头像与问候）。
     page_map = {
-        "数据导入": lambda: render_import(username),
+        "数据导入": lambda: render_import(SHARED_WORKSPACE),
         "销售员详情": lambda: render_salesperson(),
-        "完成额度提成": lambda: render_quota(username),
-        "利润提成": lambda: render_profit(username),
-        "回款时效提成": lambda: render_payment(username),
-        "总提成汇总": lambda: render_total(username),
-        "结余合同": lambda: render_balance(username),
-        "历史记录": lambda: render_history(username),
+        "完成额度提成": lambda: render_quota(SHARED_WORKSPACE),
+        "利润提成": lambda: render_profit(SHARED_WORKSPACE),
+        "回款时效提成": lambda: render_payment(SHARED_WORKSPACE),
+        "总提成汇总": lambda: render_total(SHARED_WORKSPACE),
+        "结余合同": lambda: render_balance(SHARED_WORKSPACE),
+        "历史记录": lambda: render_history(SHARED_WORKSPACE),
     }
     page_map[page]()
 

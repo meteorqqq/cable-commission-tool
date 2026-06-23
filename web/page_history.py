@@ -15,7 +15,8 @@ def render_history(username: str):
         eyebrow="Archive",
     ))
 
-    sessions = list_sessions(username)
+    # 共享模式：列出全部历史会话（含各账号此前保存的），所有人都能回看。
+    sessions = list_sessions()
     if not sessions:
         st.html(empty_state("暂无历史记录", "当你保存一次计算结果后，这里会出现可回看的会话快照。"))
         return

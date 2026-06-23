@@ -6,7 +6,9 @@ import pandas as pd
 from engine.calculator import (
     calc_quota_commission_by_dept, DEFAULT_QUOTA_TIERS,
 )
-from db.database import save_rules, load_rules
+from db.database import (
+    save_rules, load_rules, save_shared_result, clear_shared_results,
+)
 from web._cache import bump_calc_version
 from web._download import render_df_download_buttons
 from web._ui import page_intro
@@ -51,7 +53,8 @@ def _calc_dept_delivery_totals() -> dict[str, float]:
 def render_quota(username: str):
     st.html(page_intro(
         "完成额度提成",
-        "按部门发货完成比确定档位，再用个人回款额乘以对应系数，适合看团队目标兑现情况。",
+        "按部门发货完成比确定档位，再用销售回款额（各合同 min(发货,回款) 之和）乘以对应系数；"
+        "回款超过发货的部分（预收/超收）不计提成。",
         eyebrow="Quota Commission",
     ))
 
@@ -147,6 +150,10 @@ def render_quota(username: str):
             result = calc_quota_commission_by_dept(delivery_df, payment_df, dept_targets, tiers)
             st.session_state["quota_result"] = result
             bump_calc_version()
+            # 共享给所有账号；上游变了，已有的总汇总作废，清掉共享 total。
+            save_shared_result("quota_result", result)
+            clear_shared_results(("total_result",))
+            st.session_state["total_result"] = None
             n_sp = int(result["销售员"].astype(str).nunique()) if not result.empty else 0
             n_rows = len(result)
             extra = f"（{n_rows} 条按部门拆分）" if n_rows != n_sp else ""

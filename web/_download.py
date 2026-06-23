@@ -139,6 +139,67 @@ def render_df_download_buttons(
         )
 
 
+def render_lazy_df_download_buttons(
+    df: pd.DataFrame,
+    *,
+    base_filename: str,
+    sheet_name: str,
+    key_prefix: str,
+    prepare_label: str = "准备下载 CSV / Excel",
+    use_container_width: bool = True,
+) -> None:
+    """延迟构建版的单表下载。
+
+    先只显示一个「准备下载」按钮，用户点击后才真正生成 CSV / Excel 字节并显示
+    下载按钮。用于总汇总页这类「同一屏可能有几十上百个下载位」的场景：避免每次
+    渲染都对每位销售员即时跑一遍 openpyxl 序列化，把单线程占满导致页面卡死。
+    """
+    ready_key = f"_dl_ready::{key_prefix}"
+    if not st.session_state.get(ready_key):
+        if st.button(prepare_label, key=f"{key_prefix}_prep",
+                     use_container_width=use_container_width):
+            st.session_state[ready_key] = True
+        else:
+            return
+    render_df_download_buttons(
+        df,
+        base_filename=base_filename,
+        sheet_name=sheet_name,
+        key_prefix=key_prefix,
+        use_container_width=use_container_width,
+    )
+
+
+def render_lazy_multi_download_buttons(
+    results_factory,
+    *,
+    base_filename: str,
+    key_prefix: str,
+    prepare_label: str = "准备下载（汇总 + 各明细）",
+    use_container_width: bool = True,
+) -> None:
+    """延迟构建版的多 sheet 下载。
+
+    ``results_factory`` 是一个返回 ``{sheet名: DataFrame}`` 的可调用对象，只有在
+    用户点击「准备下载」后才会执行——避免每次渲染都汇总并把整本工作簿（含全部
+    交货/回款明细）序列化成 Excel。
+    """
+    ready_key = f"_dl_ready::{key_prefix}"
+    if not st.session_state.get(ready_key):
+        if st.button(prepare_label, key=f"{key_prefix}_prep",
+                     use_container_width=use_container_width):
+            st.session_state[ready_key] = True
+        else:
+            return
+    results = results_factory()
+    render_multi_download_buttons(
+        results,
+        base_filename=base_filename,
+        key_prefix=key_prefix,
+        use_container_width=use_container_width,
+    )
+
+
 def render_multi_download_buttons(
     results: dict[str, pd.DataFrame],
     *,

@@ -12,7 +12,7 @@ from engine.calculator import (
     load_payment_excel,
     format_date_columns,
 )
-from db.database import save_import_snapshots
+from db.database import save_import_snapshots, clear_shared_results
 from web._cache import bump_data_version, get_project_list, get_contract_overview
 from web.page_balance import render_opening_balance_import
 from web._ui import page_intro, panel_intro
@@ -62,7 +62,15 @@ def _upload_and_load(
                 else:
                     save_import_snapshots(username, payment_df=df)
                 bump_data_version()
+                # 数据变了：旧的共享计算结果作废，自动清空，提示所有人重算。
+                clear_shared_results()
+                for _rk in (
+                    "quota_result", "profit_result", "timeliness_result",
+                    "total_result", "total_result_signature",
+                ):
+                    st.session_state[_rk] = None
                 st.success(f"已加载 {len(df)} 条记录，并已写入数据库")
+                st.info("交货/回款数据已更新，原有提成结果已清空，请到各模块重新点击「计算」。")
             except Exception as e:
                 st.error(f"加载失败: {e}")
             finally:

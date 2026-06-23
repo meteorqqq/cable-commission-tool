@@ -1178,7 +1178,10 @@ def calc_quota_commission_by_dept(delivery_df: pd.DataFrame,
     """完成额度提成。
 
     - 部门完成比 = 部门全员发货额合计 / 部门目标额（同部门共享同一完成比）。
-    - 完成额度提成 = 个人回款额 × 对应档位提成率。
+    - 完成额度提成 = 销售回款额 × 对应档位提成率。
+      其中「销售回款额」并非实收回款，而是按合同取 ``min(合同发货额, 合同回款额)``
+      再求和：回款超过发货的部分（预收 / 超收）不计提成，未发货却已收款的合同
+      销售回款额记为 0。在合同级取小值，避免某合同的预收去填补另一合同的欠发货。
 
     同一销售员可能横跨多个部门（如海外事业部 + 区域营销部），此时按
     ``(销售员, 销售部门)`` 拆分：每个部门各出一行、用各自部门的完成比定档，
@@ -1188,9 +1191,9 @@ def calc_quota_commission_by_dept(delivery_df: pd.DataFrame,
     if tiers is None:
         tiers = DEFAULT_QUOTA_TIERS
 
-    def _grp(df: pd.DataFrame | None, amount_col: str, out_col: str) -> pd.DataFrame:
-        """按 (销售员, 销售部门) 汇总金额；部门取每行自身的销售部门。"""
-        cols = ["销售员", "销售部门", out_col]
+    def _grp_contract(df: pd.DataFrame | None, amount_col: str, out_col: str) -> pd.DataFrame:
+        """按 (销售员, 销售部门, 合同编号) 汇总金额；部门取每行自身的销售部门。"""
+        cols = ["销售员", "销售部门", "合同编号", out_col]
         if (df is None or getattr(df, "empty", True)
                 or "销售员" not in df.columns or amount_col not in df.columns):
             return pd.DataFrame(columns=cols)
@@ -1200,17 +1203,33 @@ def calc_quota_commission_by_dept(delivery_df: pd.DataFrame,
             "销售员": df["销售员"].astype(str),
             "销售部门": (df["销售部门"].astype(str).str.strip()
                        if "销售部门" in df.columns else ""),
+            "合同编号": (df["合同编号"].astype(str)
+                       if "合同编号" in df.columns else ""),
             out_col: pd.to_numeric(df[amount_col], errors="coerce").fillna(0),
         })
-        return (work.groupby(["销售员", "销售部门"], dropna=False)[out_col]
+        return (work.groupby(["销售员", "销售部门", "合同编号"], dropna=False)[out_col]
                 .sum().reset_index())
 
-    sp_del = _grp(delivery_df, "发货金额", "个人发货额")
-    sp_pay = _grp(payment_df, "回款金额", "个人回款额")
+    # 先按合同取 min(发货, 回款) 得到每张合同的销售回款额，再汇总到 (销售员, 部门)。
+    c_del = _grp_contract(delivery_df, "发货金额", "合同发货额")
+    c_pay = _grp_contract(payment_df, "回款金额", "合同回款额")
 
-    sp = pd.merge(sp_del, sp_pay, on=["销售员", "销售部门"], how="outer")
-    sp["个人发货额"] = pd.to_numeric(sp["个人发货额"], errors="coerce").fillna(0)
-    sp["个人回款额"] = pd.to_numeric(sp["个人回款额"], errors="coerce").fillna(0)
+    cc = pd.merge(c_del, c_pay, on=["销售员", "销售部门", "合同编号"], how="outer")
+    cc["合同发货额"] = pd.to_numeric(cc["合同发货额"], errors="coerce").fillna(0)
+    cc["合同回款额"] = pd.to_numeric(cc["合同回款额"], errors="coerce").fillna(0)
+    cc["销售部门"] = cc["销售部门"].fillna("")
+    # 销售回款额 = 合同级 min(发货, 回款)。
+    cc["销售回款额"] = cc[["合同发货额", "合同回款额"]].min(axis=1)
+
+    sp = (
+        cc.groupby(["销售员", "销售部门"], dropna=False)
+        .agg(
+            个人发货额=("合同发货额", "sum"),
+            个人回款额=("合同回款额", "sum"),
+            销售回款额=("销售回款额", "sum"),
+        )
+        .reset_index()
+    )
     sp["销售部门"] = sp["销售部门"].fillna("")
 
     # 部门实际发货 = 该部门所有行的发货额合计（按每行自身部门归集）
@@ -1231,11 +1250,12 @@ def calc_quota_commission_by_dept(delivery_df: pd.DataFrame,
             "销售部门": dept,
             "个人发货额(元)": round(r["个人发货额"], 2),
             "个人回款额(元)": round(r["个人回款额"], 2),
+            "销售回款额(元)": round(r["销售回款额"], 2),
             "部门实际发货(万元)": round(actual_del / 10000, 2),
             "部门目标额(万元)": round(target_wan, 2),
             "部门完成比": f"{ratio_pct:.1f}%",
             "提成比例": f"{rate*100:.2f}%",
-            "完成额度提成(元)": round(float(r["个人回款额"]) * rate, 2),
+            "完成额度提成(元)": round(float(r["销售回款额"]) * rate, 2),
         })
 
     if not rows:
@@ -1333,6 +1353,8 @@ def calc_profit_commission(delivery_df: pd.DataFrame,
         pid = str(r["合同编号"])
         d_amt = float(r["合同发货额"])
         p_amt = float(r["合同回款额"])
+        # 销售回款额 = min(发货, 回款)：回款超过发货的部分不计提成。
+        sale_base = min(d_amt, p_amt)
         status = contract_status(d_amt, p_amt)
         business_flags: list[str] = []
         if (str(r["销售员"]), pid) in neg_delivery_keys:
@@ -1350,6 +1372,7 @@ def calc_profit_commission(delivery_df: pd.DataFrame,
                 (str(r["销售员"]), pid), dept_map.get(r["销售员"], "")),
             "合同发货额": round(d_amt, 2),
             "合同回款额": round(p_amt, 2),
+            "销售回款额": round(sale_base, 2),
             "业务标记": " / ".join(business_flags),
             "状态": status,
         }
@@ -1368,7 +1391,7 @@ def calc_profit_commission(delivery_df: pd.DataFrame,
                 "利润提成率": f"{rate*100:.4f}%",
                 "利润分类": cat,
                 "系数来源": src,
-                "利润提成金额": round(p_amt * rate, 2),
+                "利润提成金额": round(sale_base * rate, 2),
             })
         else:
             base.update({

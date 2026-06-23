@@ -70,3 +70,23 @@ class ImportedSnapshot(Base):
     delivery_json = Column(Text, nullable=True)
     payment_json = Column(Text, nullable=True)
     updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
+
+
+class SharedResult(Base):
+    """全工作台共享的「最新一次计算结果」。
+
+    每个 (workspace, result_type) 至多一条记录，保存对应计算结果 DataFrame 的
+    JSON。任一账号点「计算」后写入这里，其他账号登录时即可直接载入，无需重算。
+    """
+
+    __tablename__ = "shared_results"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    workspace = Column(String(100), nullable=False, default="__shared__")
+    result_type = Column(String(50), nullable=False)
+    data_json = Column(Text, nullable=True)
+    updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
+
+    __table_args__ = (
+        Index("uq_shared_results_ws_type", "workspace", "result_type", unique=True),
+    )
