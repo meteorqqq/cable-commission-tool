@@ -916,6 +916,31 @@ NAV_ITEMS = [
     "历史记录",
 ]
 
+# 需要跨页面保留的「筛选 / 搜索」控件 key。
+# 这些都是 multiselect / selectbox / text_input / checkbox，均允许经
+# session_state 写回；切勿把按钮、下载按钮（writes_allowed=False）加进来，
+# 否则它们渲染时会抛 StreamlitValueAssignmentNotAllowedError。
+# 新增筛选控件时，把它的 key 一并登记到这里即可。
+_PERSIST_FILTER_KEYS = frozenset({
+    # 回款时效提成
+    "payment_filter_status", "payment_filter_pids", "payment_filter_sps",
+    "payment_filter_depts", "payment_filter_invs", "payment_export_by_sp",
+    # 完成额度提成
+    "quota_filter_dept", "quota_filter_sp",
+    # 总提成汇总
+    "total_filter_dept", "total_filter_sp_search",
+    # 结余合同
+    "balance_search_kw", "balance_status_filter",
+    # 利润提成
+    "price_group_search", "price_group_only_subs", "price_group_expand_all",
+    "price_search_kw", "price_filter_fill", "price_filter_scope",
+    "profit_filter_status", "profit_filter_src",
+    # 历史记录
+    "history_search",
+    # 销售员详情
+    "_selected_salesperson",
+})
+
 
 def load_auth_config():
     """读取用户配置。
@@ -1019,14 +1044,15 @@ def main():
     # 本应用是单页应用，8 个模块靠侧栏切换、条件渲染。Streamlit 会回收"本轮未被
     # 渲染的控件"的状态，因此切到别的模块时，上一个模块的筛选控件未渲染、其
     # session_state 会被清空，切回来筛选就丢了。
-    # 把已存在的值"重新提交"一次，可将其从控件态提升为用户态而不被回收，从而
-    # 跨页面保留筛选条件。data_editor / file_uploader 等不允许经 session_state
-    # 写回的控件会抛异常，忽略即可。
-    for _persist_key in list(st.session_state.keys()):
-        try:
-            st.session_state[_persist_key] = st.session_state[_persist_key]
-        except Exception:
-            pass
+    # 把已存在的筛选值"重新提交"一次，可将其从控件态提升为用户态而不被回收，
+    # 从而跨页面保留筛选条件。仅处理 _PERSIST_FILTER_KEYS 登记的可写控件，
+    # 不碰按钮/下载按钮等不允许写回的控件。
+    for _persist_key in _PERSIST_FILTER_KEYS:
+        if _persist_key in st.session_state:
+            try:
+                st.session_state[_persist_key] = st.session_state[_persist_key]
+            except Exception:
+                pass
 
     initial = (display_name[:1] if display_name else username[:1] or "U").upper()
     _dn = html.escape(str(display_name or ""))
