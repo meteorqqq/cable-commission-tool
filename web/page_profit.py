@@ -22,6 +22,7 @@ from web._table import dataframe_with_fulltext_panel
 from web._ui import (
     fmt_money, split_units, truncate_units_text,
     meta_row, section_title, kpi_row, unit_pills, page_intro,
+    df_html_table,
 )
 from db.database import (
     save_rules, load_rules, save_contract_prices, load_contract_prices,
@@ -309,19 +310,13 @@ def _render_price_groups(price_df: pd.DataFrame) -> None:
                     "合同编号", "指导价", "合同价", "成本价",
                     "系数来源", "录价状态",
                 ] if c in sub.columns]
-                st.dataframe(
+                # 用轻量 HTML 表替代 st.dataframe：分组折叠框可能多达上百个，
+                # 每个 st.dataframe 都是重量级 glide-data-grid，几十上百个并排会
+                # 让渲染/切换/滚动严重卡顿；分组明细是只读视图，HTML 表足矣。
+                st.html(df_html_table(
                     sub[show_cols],
-                    width="stretch",
-                    hide_index=True,
-                    height=min(320, 45 + n_total * 36),
-                    column_config={
-                        "指导价": st.column_config.NumberColumn(format="%.2f"),
-                        "合同价": st.column_config.NumberColumn(format="%.2f"),
-                        "成本价": st.column_config.NumberColumn(format="%.2f"),
-                        "系数来源": st.column_config.TextColumn("系数来源"),
-                        "录价状态": st.column_config.TextColumn("录价状态"),
-                    },
-                )
+                    money_cols=("指导价", "合同价", "成本价"),
+                ))
 
         if real_main_pids:
             st.html(section_title(f"主合同 · 分项层级（{len(real_main_pids)} 组）"))
@@ -362,6 +357,77 @@ def _render_price_groups(price_df: pd.DataFrame) -> None:
                 st.warning(
                     f"独立合同过多，仅展示前 {max(MAX_GROUPS * 5, 1000)} 条。请使用搜索缩小范围。"
                 )
+
+
+@st.fragment
+def _render_profit_result_table(display_df: pd.DataFrame) -> None:
+    """利润提成结果的筛选 + 明细表 + 导出。
+
+    用 ``@st.fragment`` 圈成局部重跑边界：改筛选条件、点选某行（明细面板）只重跑
+    本片段，而不是整页脚本，避免重新注入全局 CSS、重建侧栏与上方价格表等，显著
+    降低交互延迟。
+    """
+    fc1, fc2 = st.columns([1, 1], gap="medium")
+    with fc1:
+        if "状态" in display_df.columns:
+            status_options = [
+                "已完成", "部分回款", "未回款", "未发货", "未发货（已收款）",
+            ]
+            status_options = [s for s in status_options
+                               if s in set(display_df["状态"].unique())]
+            picked = st.multiselect(
+                "按状态筛选",
+                options=status_options,
+                default=[],
+                key="profit_filter_status",
+            )
+            if picked:
+                display_df = display_df[display_df["状态"].isin(picked)]
+    with fc2:
+        if "系数来源" in display_df.columns:
+            # 始终列出全部选项（主合同 / 自身 / 未录入），
+            # 即便当前结果里没有某一类，也方便对比切换。
+            src_options = ["主合同", "自身", "未录入"]
+            picked_src = st.multiselect(
+                "按系数来源筛选",
+                options=src_options,
+                default=[],
+                key="profit_filter_src",
+            )
+            if picked_src:
+                display_df = display_df[display_df["系数来源"].isin(picked_src)]
+
+    dataframe_with_fulltext_panel(
+        display_df,
+        key="profit_result_selectable",
+        fulltext_cols=["开票单位"],
+        height=420,
+        column_config={
+            "开票单位": st.column_config.TextColumn(
+                "开票单位", help="保留全称；显示区域不足时可点击单元格查看完整文本。"
+            ),
+            "主合同编号": st.column_config.TextColumn(
+                "主合同编号", help="若分项合同归属某主合同，此列显示主合同号；否则与合同编号相同。",
+            ),
+            "系数来源": st.column_config.TextColumn(
+                "系数来源",
+                help="本行 K 系数的来源：主合同 / 自身 / 未录入。",
+            ),
+            "合同发货额": st.column_config.NumberColumn(format="%.2f"),
+            "合同回款额": st.column_config.NumberColumn(format="%.2f"),
+            "指导价": st.column_config.NumberColumn(format="%.2f"),
+            "合同价": st.column_config.NumberColumn(format="%.2f"),
+            "成本价": st.column_config.NumberColumn(format="%.2f"),
+            "K系数": st.column_config.NumberColumn(format="%.4f"),
+            "利润提成金额": st.column_config.NumberColumn(format="%.2f"),
+        },
+    )
+    render_df_download_buttons(
+        display_df,
+        base_filename="利润提成",
+        sheet_name="利润提成",
+        key_prefix="profit_result",
+    )
 
 
 def render_profit(username: str):
@@ -758,66 +824,6 @@ def render_profit(username: str):
             with m4:
                 st.metric("利润提成合计", f"{total_commission:,.2f}")
 
-            fc1, fc2 = st.columns([1, 1], gap="medium")
-            with fc1:
-                if "状态" in display_df.columns:
-                    status_options = [
-                        "已完成", "部分回款", "未回款", "未发货", "未发货（已收款）",
-                    ]
-                    status_options = [s for s in status_options
-                                       if s in set(display_df["状态"].unique())]
-                    picked = st.multiselect(
-                        "按状态筛选",
-                        options=status_options,
-                        default=[],
-                        key="profit_filter_status",
-                    )
-                    if picked:
-                        display_df = display_df[display_df["状态"].isin(picked)]
-            with fc2:
-                if "系数来源" in display_df.columns:
-                    # 始终列出全部选项（主合同 / 自身 / 未录入），
-                    # 即便当前结果里没有某一类，也方便对比切换。
-                    src_options = ["主合同", "自身", "未录入"]
-                    picked_src = st.multiselect(
-                        "按系数来源筛选",
-                        options=src_options,
-                        default=[],
-                        key="profit_filter_src",
-                    )
-                    if picked_src:
-                        display_df = display_df[display_df["系数来源"].isin(picked_src)]
-
-            dataframe_with_fulltext_panel(
-                display_df,
-                key="profit_result_selectable",
-                fulltext_cols=["开票单位"],
-                height=420,
-                column_config={
-                    "开票单位": st.column_config.TextColumn(
-                        "开票单位", help="保留全称；显示区域不足时可点击单元格查看完整文本。"
-                    ),
-                    "主合同编号": st.column_config.TextColumn(
-                        "主合同编号", help="若分项合同归属某主合同，此列显示主合同号；否则与合同编号相同。",
-                    ),
-                    "系数来源": st.column_config.TextColumn(
-                        "系数来源",
-                        help="本行 K 系数的来源：主合同 / 自身 / 未录入。",
-                    ),
-                    "合同发货额": st.column_config.NumberColumn(format="%.2f"),
-                    "合同回款额": st.column_config.NumberColumn(format="%.2f"),
-                    "指导价": st.column_config.NumberColumn(format="%.2f"),
-                    "合同价": st.column_config.NumberColumn(format="%.2f"),
-                    "成本价": st.column_config.NumberColumn(format="%.2f"),
-                    "K系数": st.column_config.NumberColumn(format="%.4f"),
-                    "利润提成金额": st.column_config.NumberColumn(format="%.2f"),
-                },
-            )
-            render_df_download_buttons(
-                display_df,
-                base_filename="利润提成",
-                sheet_name="利润提成",
-                key_prefix="profit_result",
-            )
+            _render_profit_result_table(display_df)
 
     _render_price_groups(price_df)

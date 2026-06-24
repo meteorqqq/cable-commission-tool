@@ -50,6 +50,46 @@ def _calc_dept_delivery_totals() -> dict[str, float]:
     return _sum_by_dept(st.session_state.get("delivery_df"), "发货金额")
 
 
+@st.fragment
+def _render_quota_result_table(result: pd.DataFrame) -> None:
+    """完成额度提成结果的筛选 + 表 + 导出。
+
+    ``@st.fragment``：改部门筛选 / 姓名搜索只重跑本片段，不整页刷新。
+    """
+    all_depts = sorted({
+        str(d).strip() for d in result.get("销售部门", pd.Series(dtype=str)).dropna()
+        if str(d).strip()
+    })
+    fc1, fc2 = st.columns([1, 1], gap="medium")
+    with fc1:
+        filter_dept = st.multiselect(
+            "按销售部门筛选", options=all_depts, default=[],
+            key="quota_filter_dept",
+        )
+    with fc2:
+        search_sp = st.text_input(
+            "按销售员姓名搜索", value="", placeholder="输入姓名片段",
+            key="quota_filter_sp",
+        )
+
+    view = result
+    if filter_dept:
+        view = view[view["销售部门"].isin(filter_dept)]
+    if search_sp and search_sp.strip():
+        kw = search_sp.strip()
+        view = view[view["销售员"].astype(str).str.contains(kw, case=False, na=False)]
+
+    st.caption(f"筛选结果：{len(view)} / {len(result)} 条")
+    st.dataframe(view, width="stretch", height=400)
+
+    render_df_download_buttons(
+        view,
+        base_filename="完成额度提成",
+        sheet_name="完成额度提成",
+        key_prefix="quota_result",
+    )
+
+
 def render_quota(username: str):
     st.html(page_intro(
         "完成额度提成",
@@ -189,35 +229,4 @@ def render_quota(username: str):
             with m4:
                 st.metric("有提成人数", f"{commissioned_n}")
 
-            all_depts = sorted({
-                str(d).strip() for d in result.get("销售部门", pd.Series(dtype=str)).dropna()
-                if str(d).strip()
-            })
-            fc1, fc2 = st.columns([1, 1], gap="medium")
-            with fc1:
-                filter_dept = st.multiselect(
-                    "按销售部门筛选", options=all_depts, default=[],
-                    key="quota_filter_dept",
-                )
-            with fc2:
-                search_sp = st.text_input(
-                    "按销售员姓名搜索", value="", placeholder="输入姓名片段",
-                    key="quota_filter_sp",
-                )
-
-            view = result
-            if filter_dept:
-                view = view[view["销售部门"].isin(filter_dept)]
-            if search_sp and search_sp.strip():
-                kw = search_sp.strip()
-                view = view[view["销售员"].astype(str).str.contains(kw, case=False, na=False)]
-
-            st.caption(f"筛选结果：{len(view)} / {len(result)} 条")
-            st.dataframe(view, width="stretch", height=400)
-
-            render_df_download_buttons(
-                view,
-                base_filename="完成额度提成",
-                sheet_name="完成额度提成",
-                key_prefix="quota_result",
-            )
+            _render_quota_result_table(result)

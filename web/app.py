@@ -841,6 +841,48 @@ div[data-testid="stMetric"] [data-testid="stMetricDelta"] {
     font-variant-numeric: tabular-nums;
 }
 
+/* ───────── 轻量静态表（替代分组里成片的 st.dataframe，渲染开销极低） ───────── */
+.rc-gtbl-wrap {
+    width: 100%;
+    overflow-x: auto;
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-sm);
+    background: rgba(255,255,255,0.92);
+}
+.rc-gtbl {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.82rem;
+}
+.rc-gtbl thead th {
+    position: sticky;
+    top: 0;
+    background: linear-gradient(180deg, #F8FAFC 0%, #F1F5F9 100%);
+    color: var(--color-ink-soft);
+    font-weight: 700;
+    text-align: left;
+    padding: 0.4rem 0.6rem;
+    border-bottom: 1px solid rgba(226, 232, 240, 0.95);
+    white-space: nowrap;
+}
+.rc-gtbl tbody td {
+    padding: 0.34rem 0.6rem;
+    border-bottom: 1px solid rgba(241, 245, 249, 0.9);
+    color: var(--color-ink);
+    white-space: nowrap;
+}
+.rc-gtbl tbody tr:nth-child(even) td { background: rgba(248, 250, 252, 0.6); }
+.rc-gtbl tbody tr:hover td { background: var(--color-surface); }
+.rc-gtbl th.num, .rc-gtbl td.num {
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+}
+.rc-gtbl-note {
+    color: var(--color-mute);
+    font-size: 0.74rem;
+    margin: 0.3rem 0 0.2rem;
+}
+
 /* ───────── Reduced motion ───────── */
 @media (prefers-reduced-motion: reduce) {
     * { transition: none !important; animation: none !important; }

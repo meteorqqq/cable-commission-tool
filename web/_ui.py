@@ -7,6 +7,8 @@ from __future__ import annotations
 
 import html as _html
 
+import pandas as pd
+
 
 _STATUS_CLS = {
     "已完成": "is-done",
@@ -141,6 +143,88 @@ def panel_intro(title: str, subtitle: str = "") -> str:
         f'{subtitle_html}'
         '</div>'
     )
+
+
+def df_html_table(
+    df: "pd.DataFrame",
+    *,
+    money_cols: tuple[str, ...] = (),
+    int_cols: tuple[str, ...] = (),
+    date_cols: tuple[str, ...] = (),
+    max_rows: int = 3000,
+) -> str:
+    """把只读 DataFrame 渲染成一张轻量静态 HTML 表。
+
+    用途：替代「分组折叠框里成片的 ``st.dataframe``」。每个 ``st.dataframe``
+    都是一个重量级 glide-data-grid（canvas + React）组件，几十上百个并排会让
+    页面渲染、切换、滚动都明显变卡；而静态 HTML 表几乎零开销。这些分组明细本就
+    是只读视图，不需要排序/选择交互，用 HTML 表完全够用。
+
+    数值列右对齐并用等宽数字；金额保留两位+千分位，日期格式化为 YYYY-MM-DD，
+    空值显示为空白。
+    """
+    if df is None or len(df) == 0:
+        return '<div class="rc-empty-body">（无数据）</div>'
+
+    money = set(money_cols)
+    ints = set(int_cols)
+    dates = set(date_cols)
+    cols = list(df.columns)
+
+    head = "".join(
+        f'<th class="{"num" if c in money or c in ints else ""}">{_html.escape(str(c))}</th>'
+        for c in cols
+    )
+
+    rows_html: list[str] = []
+    truncated = len(df) > max_rows
+    for _, r in df.head(max_rows).iterrows():
+        cells: list[str] = []
+        for c in cols:
+            v = r[c]
+            is_num = c in money or c in ints
+            if _is_blank(v):
+                txt = ""
+            elif c in money:
+                try:
+                    txt = f"{float(v):,.2f}"
+                except (TypeError, ValueError):
+                    txt = _html.escape(str(v))
+            elif c in ints:
+                try:
+                    txt = f"{int(round(float(v))):,}"
+                except (TypeError, ValueError):
+                    txt = _html.escape(str(v))
+            elif c in dates:
+                ts = pd.to_datetime(v, errors="coerce")
+                txt = "" if pd.isna(ts) else ts.strftime("%Y-%m-%d")
+            else:
+                txt = _html.escape(str(v))
+            cells.append(f'<td class="{"num" if is_num else ""}">{txt}</td>')
+        rows_html.append(f"<tr>{''.join(cells)}</tr>")
+
+    note = (
+        f'<div class="rc-gtbl-note">仅显示前 {max_rows} 行，请用搜索缩小范围。</div>'
+        if truncated else ""
+    )
+    return (
+        '<div class="rc-gtbl-wrap"><table class="rc-gtbl">'
+        f"<thead><tr>{head}</tr></thead>"
+        f"<tbody>{''.join(rows_html)}</tbody>"
+        "</table></div>" + note
+    )
+
+
+def _is_blank(v) -> bool:
+    """标量空值判定：None / NaN / NaT / 空串都算空。表格单元格均为标量，pd.isna 安全。"""
+    if v is None:
+        return True
+    if isinstance(v, str):
+        return v.strip() == ""
+    try:
+        return bool(pd.isna(v))
+    except (TypeError, ValueError):
+        return False
 
 
 def empty_state(title: str, body: str) -> str:

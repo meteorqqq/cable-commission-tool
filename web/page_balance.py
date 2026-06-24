@@ -31,7 +31,9 @@ from web._cache import (
     session_cache,
 )
 from web._download import render_df_download_buttons
-from web._ui import fmt_money, section_title, page_intro, empty_state
+from web._ui import (
+    fmt_money, section_title, page_intro, empty_state, df_html_table,
+)
 
 
 _BAL_COLS = [
@@ -430,6 +432,86 @@ def render_opening_balance_import() -> None:
             st.success(f"已撤销：发货 {rd} 行；回款 {rp} 行。")
 
 
+@st.fragment
+def _render_balance_table(bal: pd.DataFrame) -> None:
+    """结余清单的筛选 + 主表 + 销售员分组 + 导出。
+
+    用 ``@st.fragment`` 圈成局部重跑边界：改搜索/状态筛选只重跑本片段，不再整页
+    刷新。销售员分组明细改用轻量 HTML 表渲染——原先每个销售员一个 ``st.dataframe``
+    （重量级 grid），人数一多就拖慢整页渲染与切换。
+    """
+    total_n = len(bal)
+    c1, c2 = st.columns([2, 1], gap="medium")
+    with c1:
+        kw = st.text_input(
+            "搜索合同编号 / 销售员 / 开票单位",
+            value="", placeholder="输入关键字过滤表格",
+            key="balance_search_kw",
+        )
+    with c2:
+        status_opts = sorted(bal["状态"].unique().tolist())
+        picked = st.multiselect(
+            "按状态筛选",
+            options=status_opts,
+            default=[],
+            key="balance_status_filter",
+        )
+
+    view = bal
+    if kw and kw.strip():
+        k = kw.strip().lower()
+        mask = (
+            view["合同编号"].astype(str).str.lower().str.contains(k, na=False)
+            | view["销售员"].astype(str).str.lower().str.contains(k, na=False)
+            | view["开票单位"].astype(str).str.lower().str.contains(k, na=False)
+            | view["主合同编号"].astype(str).str.lower().str.contains(k, na=False)
+        )
+        view = view[mask]
+    if picked:
+        view = view[view["状态"].isin(picked)]
+
+    st.caption(f"显示 {len(view)} / {total_n} 条")
+
+    st.dataframe(
+        view,
+        width="stretch",
+        hide_index=True,
+        height=min(480, 45 + len(view) * 36),
+        column_config={
+            "累计发货额": st.column_config.NumberColumn(format="%.2f"),
+            "累计回款额": st.column_config.NumberColumn(format="%.2f"),
+            "结余金额": st.column_config.NumberColumn(format="%.2f"),
+            "最近发货日期": st.column_config.DatetimeColumn(format="YYYY-MM-DD"),
+            "最近回款日期": st.column_config.DatetimeColumn(format="YYYY-MM-DD"),
+        },
+    )
+
+    # ── 销售员分组视图（与"回款时效提成"风格一致） ──
+    st.html(section_title("按销售员分组查看"))
+    for sp, sub in view.groupby("销售员"):
+        n = len(sub)
+        bal_sum = float(sub["结余金额"].sum())
+        dept = str(sub["销售部门"].iloc[0] or "")
+        header = f"{sp}"
+        if dept:
+            header += f"　·　{dept}"
+        header += f"　·　{n} 条　·　结余 {fmt_money(bal_sum)}"
+        with st.expander(header, expanded=False):
+            st.html(df_html_table(
+                sub.drop(columns=["销售员", "销售部门"]),
+                money_cols=("累计发货额", "累计回款额", "结余金额"),
+                date_cols=("最近发货日期", "最近回款日期"),
+            ))
+
+    st.html(section_title("导出"))
+    render_df_download_buttons(
+        view,
+        base_filename="结余合同",
+        sheet_name="结余合同",
+        key_prefix="balance_dl",
+    )
+
+
 def render_balance(username: str):
     st.html(page_intro(
         "结余合同",
@@ -475,80 +557,4 @@ def render_balance(username: str):
         with m4:
             st.metric("预收合计", fmt_money(total_prepaid))
 
-        c1, c2 = st.columns([2, 1], gap="medium")
-        with c1:
-            kw = st.text_input(
-                "搜索合同编号 / 销售员 / 开票单位",
-                value="", placeholder="输入关键字过滤表格",
-                key="balance_search_kw",
-            )
-        with c2:
-            status_opts = sorted(bal["状态"].unique().tolist())
-            picked = st.multiselect(
-                "按状态筛选",
-                options=status_opts,
-                default=[],
-                key="balance_status_filter",
-            )
-
-        view = bal.copy()
-        if kw and kw.strip():
-            k = kw.strip().lower()
-            mask = (
-                view["合同编号"].astype(str).str.lower().str.contains(k, na=False)
-                | view["销售员"].astype(str).str.lower().str.contains(k, na=False)
-                | view["开票单位"].astype(str).str.lower().str.contains(k, na=False)
-                | view["主合同编号"].astype(str).str.lower().str.contains(k, na=False)
-            )
-            view = view[mask]
-        if picked:
-            view = view[view["状态"].isin(picked)]
-
-        st.caption(f"显示 {len(view)} / {total_n} 条")
-
-        st.dataframe(
-            view,
-            width="stretch",
-            hide_index=True,
-            height=min(480, 45 + len(view) * 36),
-            column_config={
-                "累计发货额": st.column_config.NumberColumn(format="%.2f"),
-                "累计回款额": st.column_config.NumberColumn(format="%.2f"),
-                "结余金额": st.column_config.NumberColumn(format="%.2f"),
-                "最近发货日期": st.column_config.DatetimeColumn(format="YYYY-MM-DD"),
-                "最近回款日期": st.column_config.DatetimeColumn(format="YYYY-MM-DD"),
-            },
-        )
-
-        # ── 销售员分组视图（与"回款时效提成"风格一致） ──
-        st.html(section_title("按销售员分组查看"))
-        for sp, sub in view.groupby("销售员"):
-            n = len(sub)
-            bal_sum = float(sub["结余金额"].sum())
-            dept = str(sub["销售部门"].iloc[0] or "")
-            header = f"{sp}"
-            if dept:
-                header += f"　·　{dept}"
-            header += f"　·　{n} 条　·　结余 {fmt_money(bal_sum)}"
-            with st.expander(header, expanded=False):
-                st.dataframe(
-                    sub.drop(columns=["销售员", "销售部门"]),
-                    width="stretch",
-                    hide_index=True,
-                    height=min(320, 45 + n * 36),
-                    column_config={
-                        "累计发货额": st.column_config.NumberColumn(format="%.2f"),
-                        "累计回款额": st.column_config.NumberColumn(format="%.2f"),
-                        "结余金额": st.column_config.NumberColumn(format="%.2f"),
-                        "最近发货日期": st.column_config.DatetimeColumn(format="YYYY-MM-DD"),
-                        "最近回款日期": st.column_config.DatetimeColumn(format="YYYY-MM-DD"),
-                    },
-                )
-
-        st.html(section_title("导出"))
-        render_df_download_buttons(
-            view,
-            base_filename="结余合同",
-            sheet_name="结余合同",
-            key_prefix="balance_dl",
-        )
+        _render_balance_table(bal)

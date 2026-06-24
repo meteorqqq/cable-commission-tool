@@ -15,6 +15,7 @@ from db.database import (
 from web._ui import (
     fmt_money, split_units, truncate_units_text,
     status_badge, unit_pills, kpi_row, meta_row, section_title, page_intro,
+    df_html_table,
 )
 from web._download import (
     render_df_download_buttons,
@@ -387,6 +388,25 @@ def render_payment(username: str):
         )
 
     st.markdown("")
+    _render_contract_details(summary_df)
+
+    with st.expander("原始时效提成明细（扁平表）", expanded=False):
+        st.dataframe(format_date_columns(timeliness_df), width="stretch", height=400)
+        render_df_download_buttons(
+            timeliness_df,
+            base_filename="回款时效提成",
+            sheet_name="回款时效提成",
+            key_prefix="payment_timeliness_flat",
+        )
+
+
+@st.fragment
+def _render_contract_details(summary_df: pd.DataFrame) -> None:
+    """合同明细：多维筛选 + 逐合同展开（发货/回款/时效明细）。
+
+    ``@st.fragment``：改任一筛选只重跑本片段，不再整页刷新（避免重渲染上方
+    「合同汇总」grid、重新注入全局 CSS 等）。逐合同明细已改用轻量 HTML 表。
+    """
     st.subheader("合同明细")
     st.caption("点击展开查看该合同的发货明细、回款明细与时效匹配结果。")
 
@@ -519,6 +539,8 @@ def render_payment(username: str):
             p_sub = annotate_payment_business_type(pay_lookup.get(key, pd.DataFrame()))
             tl_sub = annotate_payment_business_type(tl_lookup.get(key, pd.DataFrame()))
 
+            # 每个合同展开项原本含 3 张 st.dataframe（重量级 grid）；合同一多就是
+            # 成百上千个 grid 并排，页面直接卡死。明细是只读的，改用轻量 HTML 表。
             col_d, col_p = st.columns(2, gap="large")
             with col_d:
                 st.html(section_title("发货明细"))
@@ -527,14 +549,10 @@ def render_payment(username: str):
                 else:
                     cols = [c for c in del_cols_pref if c in d_sub.columns]
                     show = d_sub[cols].sort_values("发货日期") if "发货日期" in cols else d_sub[cols]
-                    st.dataframe(
+                    st.html(df_html_table(
                         format_date_columns(show.reset_index(drop=True)),
-                        width="stretch",
-                        height=min(260, 45 + len(show) * 36),
-                        column_config={
-                            "发货金额": st.column_config.NumberColumn(format="%.2f"),
-                        },
-                    )
+                        money_cols=("发货金额",),
+                    ))
             with col_p:
                 st.html(section_title("回款明细"))
                 if p_sub.empty:
@@ -542,35 +560,18 @@ def render_payment(username: str):
                 else:
                     cols = [c for c in pay_cols_pref if c in p_sub.columns]
                     show = p_sub[cols].sort_values("回款日期") if "回款日期" in cols else p_sub[cols]
-                    st.dataframe(
+                    st.html(df_html_table(
                         format_date_columns(show.reset_index(drop=True)),
-                        width="stretch",
-                        height=min(260, 45 + len(show) * 36),
-                        column_config={
-                            "回款金额": st.column_config.NumberColumn(format="%.2f"),
-                        },
-                    )
+                        money_cols=("回款金额", "核销金额"),
+                    ))
 
             st.html(section_title("时效匹配明细"))
             if tl_sub.empty:
                 st.caption("（无时效记录）")
             else:
                 cols = [c for c in tl_cols_pref if c in tl_sub.columns]
-                st.dataframe(
+                st.html(df_html_table(
                     format_date_columns(tl_sub[cols].reset_index(drop=True)),
-                    width="stretch",
-                    height=min(260, 45 + len(tl_sub) * 36),
-                    column_config={
-                        "回款金额": st.column_config.NumberColumn(format="%.2f"),
-                        "时效提成金额": st.column_config.NumberColumn(format="%.2f"),
-                    },
-                )
-
-    with st.expander("原始时效提成明细（扁平表）", expanded=False):
-        st.dataframe(format_date_columns(timeliness_df), width="stretch", height=400)
-        render_df_download_buttons(
-            timeliness_df,
-            base_filename="回款时效提成",
-            sheet_name="回款时效提成",
-            key_prefix="payment_timeliness_flat",
-        )
+                    money_cols=("回款金额", "时效提成金额"),
+                    int_cols=("回款周期(天)",),
+                ))
